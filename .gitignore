@@ -1,0 +1,5 @@
+/target
+/sandbox/
+/gui/gen/
+# 界面预览用的真实状态数据，含本机账户 SID 和路径，用 isobox status --json 重新生成
+/gui/ui-dev/data.js

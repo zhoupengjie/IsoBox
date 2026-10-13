@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ui-preview",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["gui/ui-dev/serve.js"],
+      "port": 5174
+    }
+  ]
+}

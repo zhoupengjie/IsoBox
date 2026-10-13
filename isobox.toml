@@ -1,0 +1,32 @@
+# IsoBox 配置文件。TOML 单引号字符串里的反斜杠不需要转义。
+#
+# 实际生效的是安装目录（系统盘 Program Files\IsoBox）里的这份。项目里的同名文件只是模板，
+# deploy.ps1 只在安装目录还没有配置时才复制过去，之后不会覆盖。
+# 安装目录只有管理员能修改，编辑配置需要用管理员身份打开编辑器。
+
+# 运行隔离软件的本地标准账户。卸载时只会删除备注为 isobox 的账户
+sandbox_user = "isobox"
+
+# 隔离方式：
+#   user          以独立的本地账户运行，窗口照常显示在你的桌面上（推荐）
+#   appcontainer  不建账户，但微信和 QQ 跑不起来，见文末说明
+default_mode = "user"
+
+# 交换文件夹：唯一你和隔离账户都能读写的地方，用来收发文件。
+# 不写时自动使用你下载文件夹里的 IsoBox 子文件夹。
+# exchange_dir = 'D:\Downloads\IsoBox'
+
+# 禁止隔离账户访问的位置，会加上可继承的禁止规则。修改前会自动备份权限。
+# 留空表示自动选择：所有内置的、非系统盘的 NTFS 硬盘。
+# 也可以手动写，例如 ['D:\', 'C:\Projects']。系统盘不能整盘禁止，
+# 系统盘上的个人数据在你的用户目录里，默认就不对其他账户开放。
+# 存储卡、U 盘多为 FAT32 或 exFAT，没有权限控制，插着的时候隔离软件也能读到。
+deny_paths = []
+
+# ---- 软件列表 ----
+# 用开始菜单的“IsoBox 添加软件”或 isobox-setup add 添加，会自动在这里追加条目。
+#
+# 程序放在库里：每个盘上固定的 <盘符>:\Program Files\IsoBox\apps\<名字>。
+# 用 isobox-setup library add D 在 D 盘建库，用 isobox-setup move-app <名字> --to D 移动软件。
+#
+# 注意：微信 4 和 QQNT 都基于 Chromium，无法在 AppContainer 中运行，只能用 user 方式。

@@ -1,0 +1,22 @@
+[package]
+name = "isobox-gui"
+version = "0.1.0"
+edition = "2024"
+description = "IsoBox 图形界面和托盘"
+
+[[bin]]
+name = "isobox-gui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+isobox = { path = ".." }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry"] }
+
+[build-dependencies]
+tauri-build = "2"
