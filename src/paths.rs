@@ -39,7 +39,7 @@ pub fn require_installed() -> Result<PathBuf> {
         return Ok(dir);
     }
     bail!(
-        "IsoBox 必须安装在 {}，当前在 {}。\n请用 deploy.ps1 部署后，从安装目录运行",
+        "IsoBox 必须安装在 {}，当前在 {}。\n请用 IsoBox 安装程序安装后，从安装目录运行",
         expected_install_dir().display(),
         dir.display()
     )

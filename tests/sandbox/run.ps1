@@ -1,10 +1,15 @@
-# Run the full IsoBox lifecycle test inside Windows Sandbox.
+# Run the full IsoBox lifecycle test inside Windows Sandbox: installer, add, isolation, libraries,
+# migrate, restore, GUI commands, upgrade, and the system uninstaller.
 #   powershell -ExecutionPolicy Bypass -File tests\sandbox\run.ps1
-# Requires: Windows Sandbox enabled, 7-Zip installed in C:\Program Files\7-Zip, no other sandbox running.
+# Requires: Windows Sandbox enabled, 7-Zip installed in C:\Program Files\7-Zip (bundled into the
+# installer and used to build the test package; the sandbox itself has no 7-Zip), no other sandbox running.
 # Exit code 0 when every check passed. Results: target\sandbox-test\logs\result.txt
+#   -UiTour   instead click through the installer and uninstaller pages with the default choices and
+#             save a screenshot of each page to target\sandbox-test\logs\shots (to look at the pages)
+#   -NoBuild  reuse the newest installer in target\installer
 # Keep this file ASCII.
 
-param([int]$TimeoutMinutes = 20)
+param([int]$TimeoutMinutes = 20, [switch]$UiTour, [switch]$NoBuild)
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $work = Join-Path $root 'target\sandbox-test'
@@ -16,18 +21,21 @@ if (Get-Process WindowsSandboxRemoteSession, WindowsSandboxServer -ErrorAction S
     throw 'Another Windows Sandbox is running. Close it first.'
 }
 
-Write-Host 'Building release binaries and the probe...'
-cargo build --release --manifest-path "$root\Cargo.toml" --workspace --bins
-if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
+if (-not $NoBuild) {
+    Write-Host 'Building the installer and the probe...'
+    & powershell -NoProfile -ExecutionPolicy Bypass -File "$root\installer\build.ps1"
+    if ($LASTEXITCODE -ne 0) { throw 'installer build failed' }
+}
 cargo build --release --manifest-path "$root\Cargo.toml" --example probe
 if ($LASTEXITCODE -ne 0) { throw 'cargo build --example probe failed' }
+$installer = Get-ChildItem "$root\target\installer\IsoBox-*-setup.exe" | Sort-Object LastWriteTime | Select-Object -Last 1
+if (-not $installer) { throw 'installer not found in target\installer' }
 
 if (Test-Path $work) { Remove-Item $work -Recurse -Force }
-New-Item -ItemType Directory -Force "$stage\bin", "$stage\tools", "$stage\test", $logs, "$work\pkg" | Out-Null
-foreach ($f in 'isobox.exe', 'isobox-setup.exe', 'isobox-launch.exe', 'isobox-gui.exe') { Copy-Item "$root\target\release\$f" "$stage\bin" }
-Copy-Item "$root\deploy.ps1", "$root\isobox.toml" $stage
-Copy-Item "$root\tools\*.ps1" "$stage\tools"
-Copy-Item "$PSScriptRoot\run-in-sandbox.ps1" "$stage\test"
+New-Item -ItemType Directory -Force "$stage\test", $logs, "$work\pkg" | Out-Null
+Copy-Item $installer.FullName "$stage\IsoBox-setup.exe"
+$script = if ($UiTour) { 'ui-tour.ps1' } else { 'run-in-sandbox.ps1' }
+Copy-Item "$PSScriptRoot\$script" "$stage\test"
 
 # A 7-Zip self-extracting "installer" with the probe as main program plus a helper exe
 Copy-Item "$root\target\release\examples\probe.exe" "$work\pkg\IsoProbe.exe"
@@ -46,10 +54,9 @@ $wsb = @"
   <MappedFolders>
     <MappedFolder><HostFolder>$stage</HostFolder><SandboxFolder>C:\Stage</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder>
     <MappedFolder><HostFolder>$logs</HostFolder><SandboxFolder>C:\Logs</SandboxFolder><ReadOnly>false</ReadOnly></MappedFolder>
-    <MappedFolder><HostFolder>$sevenDir</HostFolder><SandboxFolder>C:\Program Files\7-Zip</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder>
   </MappedFolders>
   <LogonCommand>
-    <Command>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Stage\test\run-in-sandbox.ps1</Command>
+    <Command>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Stage\test\$script</Command>
   </LogonCommand>
 </Configuration>
 "@

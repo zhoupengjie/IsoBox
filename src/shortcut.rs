@@ -61,7 +61,7 @@ fn create_with(app: &str, name: &str, where_: &str, exe: Option<&Path>) -> Resul
     let dir = install_dir()?;
     let target = dir.join(LAUNCHER_EXE);
     if !target.exists() {
-        bail!("找不到 {}，请先用 deploy.ps1 部署最新版本", target.display());
+        bail!("找不到 {}，请重新运行 IsoBox 安装程序", target.display());
     }
     let icon = choose_icon(app, exe, &target);
     let startup = where_.contains("startup");
@@ -332,7 +332,7 @@ fn run_ps(script: &str, env: &[(&str, String)]) -> Result<Vec<PathBuf>> {
     }
     let out = cmd.output().context("无法运行 powershell")?;
     if !out.status.success() {
-        bail!("PowerShell 执行失败: {}", String::from_utf8_lossy(&out.stderr).trim());
+        bail!("PowerShell 执行失败: {}", crate::cmd::decode_console(&out.stderr).trim());
     }
     Ok(String::from_utf8_lossy(&out.stdout)
         .lines()

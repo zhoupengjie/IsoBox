@@ -1,7 +1,7 @@
 # IsoBox 配置文件。TOML 单引号字符串里的反斜杠不需要转义。
 #
 # 实际生效的是安装目录（系统盘 Program Files\IsoBox）里的这份。项目里的同名文件只是模板，
-# deploy.ps1 只在安装目录还没有配置时才复制过去，之后不会覆盖。
+# 安装程序只在安装目录还没有配置时才复制过去，更新 IsoBox 时不会覆盖。
 # 安装目录只有管理员能修改，编辑配置需要用管理员身份打开编辑器。
 
 # 运行隔离软件的本地标准账户。卸载时只会删除备注为 isobox 的账户
@@ -24,7 +24,7 @@ default_mode = "user"
 deny_paths = []
 
 # ---- 软件列表 ----
-# 用开始菜单的“IsoBox 添加软件”或 isobox-setup add 添加，会自动在这里追加条目。
+# 用 IsoBox 界面的“添加软件”或 isobox-setup add 添加，会自动在这里追加条目。
 #
 # 程序放在库里：每个盘上固定的 <盘符>:\Program Files\IsoBox\apps\<名字>。
 # 用 isobox-setup library add D 在 D 盘建库，用 isobox-setup move-app <名字> --to D 移动软件。

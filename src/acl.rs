@@ -33,7 +33,7 @@ pub const USERS: &str = "*S-1-5-32-545";
 /// 运行 icacls，失败时附上它的输出
 pub fn icacls(args: &[&str]) -> Result<String> {
     let out = Command::new("icacls").args(args).output().context("无法运行 icacls")?;
-    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let text = crate::cmd::decode_console(&out.stdout);
     if !out.status.success() {
         bail!("icacls {} 失败: {}", args.join(" "), text.trim());
     }
@@ -198,7 +198,7 @@ pub fn restore(backup_dir: &Path) -> Result<PathBuf> {
         if !out.status.success() {
             eprintln!(
                 "注意：部分子项还原失败，通常是系统保护的文件，可以忽略: {}",
-                String::from_utf8_lossy(&out.stdout).trim()
+                crate::cmd::decode_console(&out.stdout).trim()
             );
         }
     }

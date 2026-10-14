@@ -6,7 +6,7 @@
 
 ## 状态
 
-开发中，还没有安装包。阶段一（核心）和阶段二（图形界面）已完成，下一步是安装程序。详见 [ROADMAP.md](ROADMAP.md)，接手开发请先读 [HANDOFF.md](HANDOFF.md)。
+开发中，还没有正式发布。阶段一（核心）、阶段二（图形界面）和阶段三（安装程序）已完成，下一步是发布：CI、许可证、代码签名。详见 [ROADMAP.md](ROADMAP.md)，接手开发请先读 [HANDOFF.md](HANDOFF.md)。
 
 ## 它能防住什么
 
@@ -22,12 +22,10 @@
 需要 Windows 11、VS 2022 生成工具（C++ 桌面开发和 Windows 11 SDK）、Rust、7-Zip。
 
 ```powershell
-cargo build --release --workspace
 cargo test --workspace
-.\deploy.ps1   # 管理员终端：装到 C:\Program Files\IsoBox
-& "C:\Program Files\IsoBox\isobox-setup.exe" install --apply
+powershell -ExecutionPolicy Bypass -File installer\build.ps1   # 生成 target\installer\IsoBox-<版本>-setup.exe
 ```
 
-然后从开始菜单打开 IsoBox。
+运行生成的安装包：它会把 IsoBox 装到 `C:\Program Files\IsoBox`，创建隔离账户，并让你选择要保护的硬盘。然后从开始菜单打开 IsoBox，点“添加软件”。卸载在 Windows 设置的“应用”里，可以选择保留聊天记录。
 
 许可证尚未确定。

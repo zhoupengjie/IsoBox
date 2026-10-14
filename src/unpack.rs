@@ -16,7 +16,27 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 
+use crate::{config::Config, paths};
+
+/// 系统里单独安装的 7-Zip
 pub const DEFAULT_7Z: &str = r"C:\Program Files\7-Zip\7z.exe";
+
+/// 安装程序捆绑的 7-Zip，相对安装目录。精简版 7zr.exe 解不开 NSIS 安装包，所以捆绑完整的 7z.exe 和 7z.dll
+pub const BUNDLED_7Z: &str = r"7-Zip\7z.exe";
+
+/// 要用的 7-Zip：配置里指定的 > 安装目录里捆绑的 > 系统里装的
+pub fn sevenzip(cfg: &Config) -> PathBuf {
+    if let Some(p) = &cfg.sevenzip {
+        return p.clone();
+    }
+    if let Ok(dir) = paths::install_dir() {
+        let bundled = dir.join(BUNDLED_7Z);
+        if bundled.exists() {
+            return bundled;
+        }
+    }
+    PathBuf::from(DEFAULT_7Z)
+}
 
 /// 不太可能是主程序的文件名片段
 const NOT_MAIN: &[&str] = &[
@@ -35,7 +55,7 @@ pub fn unpack(
     pick: &dyn Fn(&[Candidate]) -> Result<usize>,
 ) -> Result<PathBuf> {
     if !sevenzip.exists() {
-        bail!("找不到 7-Zip: {}，可在配置里用 sevenzip = '...' 指定", sevenzip.display());
+        bail!("找不到 7-Zip: {}。重新运行 IsoBox 安装程序可以修复，也可以在配置里用 sevenzip = '...' 指定", sevenzip.display());
     }
     if !installer.exists() {
         bail!("找不到安装包: {}", installer.display());
@@ -221,7 +241,7 @@ fn extract(sevenzip: &Path, archive: &Path, dest: &Path) -> Result<()> {
         bail!(
             "7-Zip 解不开 {}。这个安装包不是 7-Zip 能识别的格式，可以改用 --install。\n{}",
             archive.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
+            crate::cmd::decode_console(&out.stderr).trim()
         );
     }
     Ok(())

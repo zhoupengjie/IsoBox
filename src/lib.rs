@@ -9,6 +9,7 @@ pub mod library;
 pub mod paths;
 pub mod appcontainer;
 pub mod child;
+pub mod cmd;
 pub mod config;
 pub mod cred;
 pub mod launch;

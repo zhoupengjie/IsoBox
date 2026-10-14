@@ -141,7 +141,7 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Preview { installer, json } => {
-            let seven = cfg.sevenzip.clone().unwrap_or_else(|| unpack::DEFAULT_7Z.into());
+            let seven = unpack::sevenzip(&cfg);
             let p = unpack::preview(&seven, &installer);
             if json {
                 println!("{}", serde_json::to_string_pretty(&p)?);
@@ -173,7 +173,7 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Inspect { installer } => {
-            let seven = cfg.sevenzip.clone().unwrap_or_else(|| unpack::DEFAULT_7Z.into());
+            let seven = unpack::sevenzip(&cfg);
             let kind = unpack::installer_kind(&seven, &installer);
             println!("{}: {kind:?}", installer.display());
         }
@@ -213,7 +213,7 @@ fn main() -> Result<()> {
                 );
             }
             let c = prepare_container(&cfg, &appcontainer::container_name(&app), &a.extra_read)?;
-            let seven = cfg.sevenzip.clone().unwrap_or_else(|| unpack::DEFAULT_7Z.into());
+            let seven = unpack::sevenzip(&cfg);
             let exe = unpack::unpack(&seven, &installer, &c.folder()?.join("app"), Some(&a.exe_name()?), force, &|_| Ok(0))?;
             println!("完成，主程序: {}", exe.display());
             println!("现在可以运行 isobox run {app}");

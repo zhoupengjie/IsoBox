@@ -362,7 +362,7 @@ fn icacls(args: &[&str]) -> Result<()> {
         bail!(
             "icacls {} 失败: {}",
             args.join(" "),
-            String::from_utf8_lossy(&out.stdout).trim()
+            crate::cmd::decode_console(&out.stdout).trim()
         );
     }
     Ok(())

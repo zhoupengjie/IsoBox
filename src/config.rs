@@ -268,6 +268,23 @@ impl Config {
         toml::from_str(text).with_context(|| format!("解析配置失败: {}", path.display()))
     }
 
+    /// 配置文件解析不了时，逐行找出账户名和交换文件夹，其余用默认值。
+    /// 卸载时使用：配置坏了也要能撤销对系统的修改（禁止规则在各盘根目录上自动查找，不靠配置）
+    pub fn salvage(path: &Path) -> Self {
+        let text = std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+        let mut cfg: Config = toml::from_str("sandbox_user = \"isobox\"").expect("最小配置");
+        for line in text.lines() {
+            let Ok(t) = toml::from_str::<toml::Table>(line.trim().trim_start_matches('\u{feff}')) else { continue };
+            if let Some(u) = t.get("sandbox_user").and_then(|v| v.as_str()) {
+                cfg.sandbox_user = u.into();
+            }
+            if let Some(x) = t.get("exchange_dir").and_then(|v| v.as_str()) {
+                cfg.exchange_dir_raw = Some(x.into());
+            }
+        }
+        cfg
+    }
+
     /// 默认配置位置：与可执行文件同目录的 isobox.toml，找不到再用当前目录。
     pub fn default_path() -> PathBuf {
         if let Ok(exe) = std::env::current_exe() {
@@ -359,6 +376,19 @@ mod field_tests {
         assert!(cfg.exchange_dir().unwrap().ends_with("IsoBox"));
         let cfg: Config = toml::from_str("sandbox_user = \"isobox\"\nexchange_dir = 'D:\\x'").unwrap();
         assert_eq!(cfg.exchange_dir().unwrap(), PathBuf::from(r"D:\x"));
+    }
+
+    #[test]
+    fn salvage_reads_account_and_exchange_from_a_broken_file() {
+        let p = std::env::temp_dir().join(format!("isobox-salvage-{}.toml", std::process::id()));
+        // 第一行被截断的注释吞掉了换行，整个文件解析不了
+        std::fs::write(&p, "\u{feff}# 坏掉的注释 sandbox_user = \"x\"\nsandbox_user = \"sbx\"\nexchange_dir = 'E:\\Swap'\ndeny_paths = [\n'D:\\'\n]\n[apps.qq\n").unwrap();
+        assert!(Config::load(&p).is_err());
+        let cfg = Config::salvage(&p);
+        assert_eq!(cfg.sandbox_user, "sbx");
+        assert_eq!(cfg.exchange_dir().unwrap(), PathBuf::from(r"E:\Swap"));
+        std::fs::remove_file(&p).unwrap();
+        assert_eq!(Config::salvage(&p).sandbox_user, "isobox");
     }
 }
 

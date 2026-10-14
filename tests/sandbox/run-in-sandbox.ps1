@@ -32,6 +32,14 @@ function Lnk([string]$p) { (New-Object -ComObject WScript.Shell).CreateShortcut(
 function Section([string]$s) { Log ''; Log "== $s" }
 function RegHas([string]$key, [string]$name) { reg query $key /v $name 2>$null | Out-Null; return ($LASTEXITCODE -eq 0) }
 $hideKey = 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList'
+$uninstKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\IsoBox'
+$smLnk = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\IsoBox\IsoBox.lnk"
+# The installer shows its log only in its own window; in silent mode only the exit code is visible
+function RunInstaller([string[]]$a) {
+    $p = Start-Process 'C:\Stage\IsoBox-setup.exe' -ArgumentList $a -Wait -PassThru
+    Add-Content -Encoding utf8 $cmdlog ("`r`n>>> IsoBox-setup.exe " + ($a -join ' ') + "`r`nexit=" + $p.ExitCode)
+    return $p.ExitCode
+}
 
 Set-Content -Encoding utf8 $res "IsoBox sandbox test $(Get-Date -Format o)"
 Set-Content -Encoding utf8 $cmdlog ''
@@ -51,17 +59,25 @@ try {
     Set-Content "$desk\secret.txt" 'secret'
     $x = Join-Path $env:USERPROFILE 'Downloads\IsoBox'
 
-    Section 'deploy'
-    $o = & powershell -NoProfile -ExecutionPolicy Bypass -File C:\Stage\deploy.ps1 -NoBuild -BinDir C:\Stage\bin 2>&1 | Out-String
-    Add-Content -Encoding utf8 $cmdlog ("`r`n>>> deploy.ps1`r`n" + $o)
-    Check 'deploy: files installed' ((Test-Path $setup) -and (Test-Path "$IB\isobox.toml") -and (Test-Path "$IB\add-app.ps1"))
-    Check 'deploy: install dir read-only for Users' ((Acl $IB) -match 'BUILTIN\\Users:\(OI\)\(CI\)\(RX\)')
-    $deny = "'C:\TestData'"
-    if ($hasT) { $deny += ", 'T:\'" }
-    Set-Content -Encoding utf8 "$IB\isobox.toml" "sandbox_user = `"isobox`"`r`ndefault_mode = `"user`"`r`ndeny_paths = [$deny]`r`n"
+    Section 'installer (silent first install, creates the account)'
+    Check 'sandbox has no system 7-Zip, so the bundled one is used' (-not (Test-Path 'C:\Program Files\7-Zip\7z.exe'))
+    $deny = 'C:\TestData'
+    if ($hasT) { $deny += ';T:\' }
+    $code = RunInstaller @('/S', "/PROTECT=$deny")
+    Check 'installer exits 0' ($code -eq 0) "exit=$code"
+    if ($code -ne 0) { Run $setup @('install') | Out-Null }
+    Check 'installer: program files' ((Test-Path $setup) -and (Test-Path $cli) -and (Test-Path "$IB\isobox-launch.exe") -and (Test-Path "$IB\isobox-gui.exe"))
+    Check 'installer: bundled 7-Zip' ((Test-Path "$IB\7-Zip\7z.exe") -and (Test-Path "$IB\7-Zip\7z.dll") -and (Test-Path "$IB\7-Zip\License.txt"))
+    Check 'installer: config and uninstaller' ((Test-Path "$IB\isobox.toml") -and (Test-Path "$IB\uninstall.exe"))
+    Check 'installer: install dir read-only for Users' ((Acl $IB) -match 'BUILTIN\\Users:\(OI\)\(CI\)\(RX\)')
+    Check 'installer: install dir does not inherit' (-not ((Acl $IB) -match '\(I\)')) (Acl $IB)
+    $un = Get-ItemProperty $uninstKey -ErrorAction SilentlyContinue
+    Check 'installer: Apps entry' ($un -and $un.DisplayName -eq 'IsoBox' -and $un.DisplayVersion -and ($un.UninstallString -like '*uninstall.exe*') -and $un.QuietUninstallString)
+    Check 'installer: start menu shortcut for all users' ((Lnk $smLnk).TargetPath -like "$IB\isobox-gui.exe")
+    $cfgText = Get-Content "$IB\isobox.toml" -Raw -Encoding UTF8
+    Check 'installer: protect choice saved in config' (($cfgText -match 'protect_auto = false') -and ($cfgText -match 'TestData'))
 
-    Section 'install'
-    Check 'install exits 0' ((Run $setup @('install', '--apply')) -eq 0)
+    Section 'account created by the installer'
     $u = Get-LocalUser isobox -ErrorAction SilentlyContinue
     Check 'account created' ([bool]$u)
     $sid = if ($u) { $u.SID.Value } else { 'none' }
@@ -78,17 +94,37 @@ try {
     Run $setup @('drives') | Out-Null
     Run $setup @('library', 'list') | Out-Null
 
+    Section 'install can be re-run'
+    $nb = @(Get-ChildItem "$IB\backup" -Directory -ErrorAction SilentlyContinue).Count
+    Check 'install --apply again exits 0' ((Run $setup @('install', '--apply')) -eq 0)
+    Check 'no new ACL backup on re-run' (@(Get-ChildItem "$IB\backup" -Directory).Count -eq $nb)
+    Check 'still protected after re-run' ((Acl 'C:\TestData') -match 'isobox:\(OI\)\(CI\)\(N\)')
+    Check 'exchange dir must not be a drive root' ((Run $setup @('set-exchange', 'C:\')) -ne 0)
+    Check 'exchange dir must not be the user profile' ((Run $setup @('set-exchange', $env:USERPROFILE)) -ne 0)
+
     Section 'add (quick install = unpack)'
     Check 'add exits 0' ((Run $setup @('add', 'probe', 'C:\Stage\test\probe-setup.exe', '--display', 'Probe')) -eq 0)
     Check 'program unpacked into C library' (Test-Path "$IB\apps\probe\IsoProbe.exe")
-    Check 'helper exe ranked below main program' ((Get-Content "$IB\isobox.toml" -Raw) -match "exe = `"IsoProbe.exe`"")
-    Check 'config records library C' ((Get-Content "$IB\isobox.toml" -Raw) -match '(?s)\[apps\.probe\].*library = "C"')
+    Check 'helper exe ranked below main program' ((Get-Content "$IB\isobox.toml" -Raw -Encoding UTF8) -match "exe = `"IsoProbe.exe`"")
+    Check 'config records library C' ((Get-Content "$IB\isobox.toml" -Raw -Encoding UTF8) -match '(?s)\[apps\.probe\].*library = "C"')
     $lnk = "$desk\Probe.lnk"
     Check 'desktop shortcut created' (Test-Path $lnk)
     if (Test-Path $lnk) {
         Check 'shortcut icon is the program in the library' ((Lnk $lnk).IconLocation -like "*apps\probe\IsoProbe.exe*") (Lnk $lnk).IconLocation
         Check 'shortcut targets launcher' ((Lnk $lnk).TargetPath -like "*IsoBox\isobox-launch.exe")
     }
+
+    Section 'installer again (update keeps everything)'
+    Set-Content "$IB\foreign.txt" 'not ours'
+    Check 'installer refuses a folder with foreign files' ((RunInstaller @('/S')) -eq 2)
+    Remove-Item "$IB\foreign.txt" -Force
+    $nb = @(Get-ChildItem "$IB\backup" -Directory).Count
+    $code = RunInstaller @('/S')
+    Check 'update exits 0' ($code -eq 0) "exit=$code"
+    Check 'update keeps app config' ((Get-Content "$IB\isobox.toml" -Raw -Encoding UTF8) -match '\[apps\.probe\]')
+    Check 'update keeps the app in the library' (Test-Path "$IB\apps\probe\IsoProbe.exe")
+    Check 'update keeps apps dir permissions' ((Acl "$IB\apps") -match 'isobox:\(OI\)\(CI\)\(M\)')
+    Check 'update keeps protection, no new backup' (((Acl 'C:\TestData') -match 'isobox:\(OI\)\(CI\)\(N\)') -and (@(Get-ChildItem "$IB\backup" -Directory).Count -eq $nb))
 
     Section 'isolation probe (running as isobox)'
     Remove-Item "$x\probe-result.txt" -ErrorAction SilentlyContinue
@@ -113,7 +149,7 @@ try {
         Check 'library add T' (((Run $setup @('library', 'add', 'T')) -eq 0) -and (Test-Path 'T:\Program Files\IsoBox\library.toml'))
         Check 'T library root has no inherited deny' (-not (HasDeny 'T:\Program Files\IsoBox'))
         Check 'move-app to T' (((Run $setup @('move-app', 'probe', '--to', 'T')) -eq 0) -and (Test-Path 'T:\Program Files\IsoBox\apps\probe\IsoProbe.exe') -and -not (Test-Path "$IB\apps\probe"))
-        Check 'config records library T' ((Get-Content "$IB\isobox.toml" -Raw) -match '(?s)\[apps\.probe\].*library = "T"')
+        Check 'config records library T' ((Get-Content "$IB\isobox.toml" -Raw -Encoding UTF8) -match '(?s)\[apps\.probe\].*library = "T"')
         if (Test-Path $lnk) { Check 'shortcut icon follows the move' ((Lnk $lnk).IconLocation -like 'T:\*') (Lnk $lnk).IconLocation }
         Remove-Item "$x\probe-result.txt" -ErrorAction SilentlyContinue
         Run $cli @('run', 'probe', '--wait', '--no-theme-sync', '--', $x) | Out-Null
@@ -133,7 +169,7 @@ try {
     Copy-Item "$IB\apps\probe\IsoProbe.exe" 'C:\Users\isobox\Apps\legacy\IsoProbe.exe'
     Copy-Item "$IB\apps\probe\IsoProbe.exe" "$old\icons\legacy.exe"
     foreach ($f in 'isobox.exe', 'isobox-setup.exe', 'isobox-launch.exe') { Copy-Item "$IB\$f" $old }
-    $oldCfg = (Get-Content "$IB\isobox.toml" -Raw) + "`r`n[apps.legacy]`r`nportable = true`r`nexe = 'IsoProbe.exe'`r`ndisplay = 'Legacy'`r`n"
+    $oldCfg = (Get-Content "$IB\isobox.toml" -Raw -Encoding UTF8) + "`r`n[apps.legacy]`r`nportable = true`r`nexe = 'IsoProbe.exe'`r`ndisplay = 'Legacy'`r`n"
     Set-Content -Encoding utf8 "$old\isobox.toml" $oldCfg
     $ll = Lnk "$desk\Legacy.lnk"; $ll.TargetPath = "$old\isobox-launch.exe"; $ll.Arguments = 'legacy'; $ll.IconLocation = "$old\icons\legacy.exe,0"; $ll.Save()
     # Reproduce a real-world case: a terminal is sitting in the old directory, so it cannot be removed
@@ -145,7 +181,7 @@ try {
     Start-Sleep -Seconds 1
     Check 'second migrate run only cleans up' ((Run $setup @('migrate', '--from', $old)) -eq 0)
     Check 'legacy app moved into C library' ((Test-Path "$IB\apps\legacy\IsoProbe.exe") -and -not (Test-Path 'C:\Users\isobox\Apps\legacy'))
-    Check 'legacy config records library C' ((Get-Content "$IB\isobox.toml" -Raw) -match '(?s)\[apps\.legacy\].*library = "C"')
+    Check 'legacy config records library C' ((Get-Content "$IB\isobox.toml" -Raw -Encoding UTF8) -match '(?s)\[apps\.legacy\].*library = "C"')
     Check 'old install dir removed' (-not (Test-Path $old))
     Check 'template config kept as backup' (Test-Path "$IB\isobox.toml.template")
     Check 'legacy shortcut retargeted' ((Lnk "$desk\Legacy.lnk").TargetPath -like "$IB\isobox-launch.exe") (Lnk "$desk\Legacy.lnk").TargetPath
@@ -169,7 +205,7 @@ try {
     Section 'commands used by the GUI'
     Check 'protect add exits 0' ((Run $setup @('protect', 'add', 'C:\TestData')) -eq 0)
     Check 'protect add applied deny' ((Acl 'C:\TestData') -match 'isobox:\(OI\)\(CI\)\(N\)')
-    $cfgText = Get-Content "$IB\isobox.toml" -Raw
+    $cfgText = Get-Content "$IB\isobox.toml" -Raw -Encoding UTF8
     Check 'protect add recorded in config' (($cfgText -match 'C:\\\\TestData|C:\\TestData') -and ($cfgText -match 'protect_auto = false'))
     Check 'protect remove exits 0' ((Run $setup @('protect', 'remove', 'C:\TestData')) -eq 0)
     Check 'protect remove lifted deny' (-not (HasDeny 'C:\TestData'))
@@ -177,7 +213,7 @@ try {
     Check 'set-exchange exits 0' ((Run $setup @('set-exchange', 'C:\Exchange2')) -eq 0)
     Check 'new exchange granted' ((Acl 'C:\Exchange2') -match 'isobox:\(OI\)\(CI\)\(M\)')
     Check 'old exchange grant removed' (-not ((Acl $x) -match '\\isobox:'))
-    Check 'config records new exchange' ((Get-Content "$IB\isobox.toml" -Raw) -match 'exchange_dir = .C:\\+Exchange2')
+    Check 'config records new exchange' ((Get-Content "$IB\isobox.toml" -Raw -Encoding UTF8) -match 'exchange_dir = .C:\\+Exchange2')
     Run $setup @('set-exchange', $x) | Out-Null
     $glog = "$log\setup-log-test.txt"
     & $setup --log $glog --non-interactive library list | Out-Null
@@ -202,15 +238,30 @@ try {
     Check 'remove-app exits 0' ((Run $setup @('remove-app', 'probe')) -eq 0)
     Check 'program dir removed' (-not (Test-Path "$IB\apps\probe"))
     Check 'shortcut removed' (-not (Test-Path $lnk))
-    Check 'config entry removed' (-not ((Get-Content "$IB\isobox.toml" -Raw) -match '\[apps\.probe\]'))
+    Check 'config entry removed' (-not ((Get-Content "$IB\isobox.toml" -Raw -Encoding UTF8) -match '\[apps\.probe\]'))
 
-    Section 'uninstall'
-    Check 'uninstall exits 0' ((Run $setup @('uninstall', '--apply')) -eq 0)
+    Section 'uninstall (system uninstaller, keeping the account files)'
+    # Stand-in for a chat history inside the isolated account's Documents
+    $chat = 'C:\Users\isobox\Documents\xwechat_files\wxid_test'
+    New-Item -ItemType Directory -Force $chat | Out-Null
+    Set-Content "$chat\msg.db" 'chat'
+    Start-Process "$IB\uninstall.exe" -ArgumentList '/S' -Wait | Out-Null
+    # The uninstaller copies itself to %TEMP% and runs from there, so wait for that copy as well
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while ((Get-Process -Name 'Un', 'Un_*', 'Au_*' -ErrorAction SilentlyContinue) -and $sw.Elapsed.TotalSeconds -lt 300) { Start-Sleep -Seconds 1 }
     Check 'account removed' (-not (Get-LocalUser isobox -ErrorAction SilentlyContinue))
     Check 'profile removed' (-not (Test-Path 'C:\Users\isobox'))
     Check 'profile list entry removed' (-not (Test-Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"))
-    Check 'C library removed' ((-not (Test-Path "$IB\library.toml")) -and -not (Test-Path "$IB\apps"))
-    Check 'program files kept' (Test-Path $setup)
+    Check 'install dir removed (library, backups, program files)' (-not (Test-Path $IB)) ((Get-ChildItem $IB -Recurse -Force -ErrorAction SilentlyContinue | Select-Object -First 8 -ExpandProperty FullName) -join ', ')
+    Check 'Apps entry removed' (-not (Test-Path $uninstKey))
+    Check 'start menu shortcut removed' (-not (Test-Path $smLnk))
+    $kept = Get-ChildItem $x -Recurse -Filter msg.db -ErrorAction SilentlyContinue | Select-Object -First 1
+    Check 'chat history kept in the exchange folder' ($kept -and ((Get-Content $kept.FullName) -eq 'chat')) "$($kept.FullName)"
+    if ($kept) {
+        Check 'kept files have no rule for the deleted account' (-not ((Acl $kept.FullName) -match [regex]::Escape($sid))) (Acl $kept.FullName)
+        Check 'kept files inherit the exchange folder permissions' ((Acl $kept.FullName) -match [regex]::Escape("$($env:USERNAME):(I)(F)")) (Acl $kept.FullName)
+        Check 'kept files owned by the user' ((Get-Acl $kept.FullName).Owner -like "*\$env:USERNAME") (Get-Acl $kept.FullName).Owner
+    }
     Check 'no rule left on C:\TestData' (-not ((Acl 'C:\TestData') -match [regex]::Escape($sid)))
     if ($hasT) { Check 'no rule left on T:\' (-not (((Acl 'T:\') -match [regex]::Escape($sid)) -or (HasDeny 'T:\'))) (Acl 'T:\') }
     Check 'no rule left on exchange dir' (-not ((Acl $x) -match [regex]::Escape($sid)))

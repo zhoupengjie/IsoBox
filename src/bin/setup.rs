@@ -2,8 +2,9 @@
 //! install 和 uninstall 默认只打印计划，加 --apply 才真正修改系统。
 
 use std::{
+    io::Write,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, ExitCode},
 };
 
 use anyhow::{Context, Result, bail};
@@ -12,6 +13,7 @@ use isobox::{
     account::{lookup_sid, owner_sid, profile_path},
     acl,
     apps::{self, AddOptions},
+    cmd,
     config::Config,
     cred, drives, launch, library, paths, shortcut,
     wide::to_wide,
@@ -29,6 +31,20 @@ use windows::{
     },
     core::{PCWSTR, PWSTR},
 };
+
+/// 卸载时选择保留数据：隔离账户个人文件夹里这些文件夹的内容移到交换文件夹，左边是原名，右边是保存后的名字。
+/// 微信 4 的聊天记录在 Documents\xwechat_files，QQNT 的在 Documents\Tencent Files
+const KEEP_FOLDERS: &[(&str, &str)] = &[
+    ("Documents", "文档"),
+    ("Desktop", "桌面"),
+    ("Downloads", "下载"),
+    ("Pictures", "图片"),
+    ("Videos", "视频"),
+    ("Music", "音乐"),
+];
+
+/// 保留的数据放在交换文件夹的这个子文件夹里
+const KEEP_DIR: &str = "隔离账户的文件";
 
 /// 卸载时在这些位置查找沙盒用户留下的文件夹。它们不属于个人文件夹，删除账户不会带走
 const SHARED_DIRS: &[&str] = &[r"C:\ProgramData", r"C:\Users\Public"];
@@ -64,20 +80,40 @@ struct Cli {
     /// 不等待键盘输入：需要选择时自动选推荐项
     #[arg(long, global = true)]
     non_interactive: bool,
+    /// 输出改用带 BOM 的 UTF-16LE。安装程序（NSIS）据此实时显示中文输出
+    #[arg(long, global = true)]
+    utf16: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// 创建隔离账户和系统盘的库，禁止它访问要保护的位置，建立交换文件夹
-    Install,
+    /// 创建隔离账户和系统盘的库，禁止它访问要保护的位置，建立交换文件夹。
+    /// 可以重复运行：已经做过的步骤会跳过，用于补上中途失败的安装
+    Install {
+        /// 要保护的位置，可以写多次，例如 --protect D:\ --protect E:\。写进配置，取代自动选择
+        #[arg(long, value_name = "路径", conflicts_with = "no_protect")]
+        protect: Vec<PathBuf>,
+        /// 不保护任何盘，只靠账户隔离（你的用户目录默认就不对其他账户开放）
+        #[arg(long)]
+        no_protect: bool,
+        /// 交换文件夹，写进配置。不写时用配置里的，或下载文件夹里的 IsoBox
+        #[arg(long, value_name = "文件夹")]
+        exchange: Option<PathBuf>,
+    },
     /// 按安全顺序撤销 install 做的所有改动，删除所有库
     Uninstall {
         /// 账户已被手动删除时，用它的 SID 清理残留权限，例如 S-1-5-21-...-1001
         #[arg(long)]
         sid: Option<String>,
+        /// 删除账户前，把它的文档、桌面、下载等文件夹里的文件（包括微信、QQ 的聊天记录）移到交换文件夹
+        #[arg(long)]
+        keep_data: bool,
     },
+    /// 给安装程序用：账户状态、默认的交换文件夹、每个盘能否保护，每行一项
+    #[command(hide = true)]
+    InstallerInfo,
     /// 列出所有盘，以及能否保护、能否建库
     Drives,
     /// 管理库：每个盘上固定位置 <盘>:\Program Files\IsoBox
@@ -174,23 +210,50 @@ enum Step {
     RemoveLibrary(library::Library),
     RemoveShortcuts,
     DeletePath(PathBuf),
+    /// 把隔离账户个人文件夹（profile）里的文件移到 dest。失败时不再继续删除账户，免得丢数据
+    SaveData { profile: PathBuf, dest: PathBuf },
     DeleteProfile(String),
     DeleteUser,
     UnhideFromLogin,
     DeleteCredential,
 }
 
-fn main() -> Result<()> {
+fn main() -> ExitCode {
     let cli = Cli::parse();
-    if let Some(log) = &cli.log {
-        redirect_output(log)?;
+    if let Some(log) = &cli.log
+        && let Err(e) = redirect_output(log)
+    {
+        eprintln!("Error: {e:?}");
+        return ExitCode::FAILURE;
     }
     if cli.non_interactive {
-        // SAFETY: 单线程，程序刚启动，还没有其他线程读取环境变量
+        // SAFETY: 程序刚启动，下面的转码线程还没开始，没有其他线程读取环境变量
         unsafe { std::env::set_var("ISOBOX_NONINTERACTIVE", "1") };
     }
+    // 转码失败时照常输出 UTF-8，只是安装程序里显示成乱码
+    let utf16 = if cli.utf16 { Utf16Out::start().ok() } else { None };
+    let result = run(cli);
+    if let Err(e) = &result {
+        eprintln!("Error: {e:?}");
+    }
+    if let Some(u) = utf16 {
+        u.finish();
+    }
+    if result.is_ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
+fn run(cli: Cli) -> Result<()> {
     let cfg_path = cli.config.clone().unwrap_or_else(Config::default_path);
-    let cfg = Config::load(&cfg_path)?;
+    let cfg = match Config::load(&cfg_path) {
+        Ok(c) => c,
+        // 配置坏了也要能卸载，否则禁止规则和隔离账户就没法清理了
+        Err(e) if matches!(cli.cmd, Cmd::Uninstall { .. }) && cfg_path.exists() => {
+            let c = Config::salvage(&cfg_path);
+            eprintln!("注意：{e:#}\n配置文件读不出来，按隔离账户 {} 卸载\n", c.sandbox_user);
+            c
+        }
+        Err(e) => return Err(e),
+    };
 
     let me = std::env::var("USERNAME").unwrap_or_default();
     if cfg.sandbox_user.eq_ignore_ascii_case(&me) {
@@ -262,7 +325,12 @@ fn main() -> Result<()> {
         }
         Cmd::SetExchange { path } => {
             admin()?;
+            check_exchange_dir(&path)?;
             set_exchange(&cfg_path, &cfg, &path)
+        }
+        Cmd::InstallerInfo => {
+            installer_info(&cfg);
+            Ok(())
         }
         Cmd::BackupAcl { path } => {
             admin()?;
@@ -277,22 +345,48 @@ fn main() -> Result<()> {
             println!("已还原 {} 的权限", target.display());
             Ok(())
         }
-        Cmd::Install => {
+        Cmd::Install { protect, no_protect, exchange } => {
+            check_same_user()?;
+            let mut cfg = cfg;
+            if let Some(x) = &exchange {
+                check_exchange_dir(x)?;
+                cfg.exchange_dir_raw = Some(x.clone());
+            }
+            let choose_protect = no_protect || !protect.is_empty();
+            if choose_protect {
+                cfg.deny_paths = protect;
+                cfg.protect_auto_raw = Some(false);
+            }
             let steps = install_plan(&cfg)?;
+            // 安装时的选择先写进配置：中途失败的话，从界面或再次运行安装程序重试时还是同样的选择
+            if cli.apply && (choose_protect || exchange.is_some()) {
+                admin()?;
+                if choose_protect {
+                    save_protect_list(&cfg_path, &cfg.deny_paths)?;
+                }
+                if let Some(x) = &exchange {
+                    isobox::config::set_top_level(&cfg_path, "exchange_dir", toml::Value::from(x.display().to_string()))?;
+                }
+            }
             confirm_and_run(&steps, &cfg, cli.apply, true)?;
             if cli.apply {
-                println!(
-                    "\n完成。下一步：用开始菜单的“IsoBox 添加软件”，或 isobox-setup add <名字> <安装包> 添加软件。"
-                );
+                println!("\n完成。下一步：打开 IsoBox，点“添加软件”把要隔离的软件装进来。");
             }
             Ok(())
         }
-        Cmd::Uninstall { sid } => {
-            let steps = uninstall_plan(&cfg, sid)?;
+        Cmd::Uninstall { sid, keep_data } => {
+            let steps = uninstall_plan(&cfg, sid, keep_data)?;
             confirm_and_run(&steps, &cfg, cli.apply, false)?;
             if cli.apply {
                 if let Ok(x) = cfg.exchange_dir() {
                     println!("\n交换文件夹 {} 里的文件没有删除，确认不需要后可手动删掉。", x.display());
+                }
+                for s in &steps {
+                    if let Step::SaveData { dest, .. } = s
+                        && dest.exists()
+                    {
+                        println!("隔离账户的文件已移到 {}。", dest.display());
+                    }
                 }
                 println!("卸载完成。");
             }
@@ -329,6 +423,16 @@ fn confirm_and_run(steps: &[Step], cfg: &Config, apply: bool, stop_on_error: boo
         if let Err(e) = execute(s, cfg) {
             if stop_on_error {
                 return Err(e).with_context(|| describe(s, &cfg.sandbox_user));
+            }
+            if matches!(s, Step::SaveData { .. }) {
+                // 后面是删除个人文件夹和账户。文件没移走就删，选择保留的数据会丢
+                return Err(e).with_context(|| {
+                    format!(
+                        "{}。为了不丢失数据，后面的步骤（删除个人文件夹和账户）没有执行。\n\
+                         确认隔离软件都已退出、文件没有被占用后，再卸载一次即可",
+                        describe(s, &cfg.sandbox_user)
+                    )
+                });
             }
             eprintln!("  失败: {}: {e:#}", describe(s, &cfg.sandbox_user));
             failed.push(describe(s, &cfg.sandbox_user));
@@ -476,18 +580,39 @@ fn check_protectable(p: &Path) -> Result<()> {
     Ok(())
 }
 
+/// 已经存在的隔离账户的 SID。账户存在但不能接着用时报错
+fn existing_account(cfg: &Config) -> Result<Option<String>> {
+    let user = &cfg.sandbox_user;
+    let Ok(sid) = lookup_sid(user) else { return Ok(None) };
+    if user_comment(user)? != MARKER {
+        bail!("系统里已经有名为 {user} 的账户，但不是 IsoBox 创建的。请在配置里把 sandbox_user 改成别的名字");
+    }
+    if cred::load(user).is_err() {
+        bail!(
+            "隔离账户 {user} 已经存在，但当前账户的凭据管理器里没有它的密码，可能是用另一个 Windows 账户安装的。\n\
+             请用当初安装 IsoBox 的账户操作；确实要重来的话，先卸载再安装"
+        );
+    }
+    Ok(Some(sid))
+}
+
 fn install_plan(cfg: &Config) -> Result<Vec<Step>> {
-    let mut steps = vec![
-        Step::CreateUser,
-        Step::HideFromLogin,
-        Step::CreateProfile,
-        Step::CreateLibrary(drives::system_drive()),
-    ];
+    let existing = existing_account(cfg)?;
+    let mut steps = Vec::new();
+    match existing {
+        None => steps.push(Step::CreateUser),
+        Some(_) => println!("隔离账户 {} 已经存在，补上还没做的步骤", cfg.sandbox_user),
+    }
+    steps.extend([Step::HideFromLogin, Step::CreateProfile, Step::CreateLibrary(drives::system_drive())]);
     let targets = protect_targets(cfg)?;
     if targets.is_empty() {
         eprintln!("注意：没有要保护的硬盘。你的用户目录默认就是隔离的");
     }
     for p in targets {
+        // 已经有禁止规则的不再备份：那时的备份里已经带着禁止规则，用它还原不掉
+        if existing.as_deref().is_some_and(|sid| acl::has_explicit_deny(&p, sid)) {
+            continue;
+        }
         steps.push(Step::BackupAcl(p.clone()));
         steps.push(Step::Deny(p));
     }
@@ -499,7 +624,7 @@ fn install_plan(cfg: &Config) -> Result<Vec<Step>> {
 
 /// 顺序很重要：先用 SID 撤销权限、删配置文件，最后才删用户。
 /// 反过来做的话，权限规则会变成指向不存在账户的“未知 SID”。
-fn uninstall_plan(cfg: &Config, sid_arg: Option<String>) -> Result<Vec<Step>> {
+fn uninstall_plan(cfg: &Config, sid_arg: Option<String>, keep_data: bool) -> Result<Vec<Step>> {
     let user = &cfg.sandbox_user;
     let sid = match lookup_sid(user) {
         Ok(s) => {
@@ -550,6 +675,12 @@ fn uninstall_plan(cfg: &Config, sid_arg: Option<String>) -> Result<Vec<Step>> {
             for p in find_owned(sid) {
                 steps.push(Step::DeletePath(p));
             }
+            // 在撤销交换文件夹的授权之后移动：重新继承权限时不会再带上隔离账户
+            if keep_data
+                && let Ok(Some(profile)) = profile_path(sid)
+            {
+                steps.push(Step::SaveData { profile, dest: keep_data_dir(cfg)? });
+            }
             // 个人文件夹里包括旧位置 Apps 下的程序和所有聊天记录等数据
             steps.push(Step::DeleteProfile(sid.clone()));
         }
@@ -595,6 +726,9 @@ fn describe(s: &Step, user: &str) -> String {
         }
         Step::RemoveShortcuts => "删除桌面、开始菜单和开机启动里的 IsoBox 快捷方式".into(),
         Step::DeletePath(p) => format!("删除 {user} 留下的 {}", p.display()),
+        Step::SaveData { dest, .. } => {
+            format!("把 {user} 的文档、桌面、下载等文件夹里的文件（包括聊天记录）移到 {}", dest.display())
+        }
         Step::DeleteProfile(sid) => format!("删除 {user} 的个人文件夹和注册表配置（{sid}）"),
         Step::DeleteUser => format!("删除用户 {user}"),
         Step::UnhideFromLogin => "删除登录界面隐藏设置".into(),
@@ -606,7 +740,7 @@ fn execute(s: &Step, cfg: &Config) -> Result<()> {
     let user = cfg.sandbox_user.as_str();
     match s {
         Step::CreateUser => create_user(user),
-        Step::HideFromLogin => run("reg", &["add", HIDE_KEY, "/v", user, "/t", "REG_DWORD", "/d", "0", "/f"]),
+        Step::HideFromLogin => exec("reg", &["add", HIDE_KEY, "/v", user, "/t", "REG_DWORD", "/d", "0", "/f"]),
         Step::CreateProfile => {
             let pw = cred::load(user)?;
             let sys32 = Path::new(r"C:\Windows\System32");
@@ -665,12 +799,13 @@ fn execute(s: &Step, cfg: &Config) -> Result<()> {
                  $t | ForEach-Object {{ 'removing task ' + $_.TaskPath + $_.TaskName }}; \
                  $t | Unregister-ScheduledTask -Confirm:$false"
             );
-            run("powershell.exe", &["-NoProfile", "-Command", &script])
+            exec("powershell.exe", &["-NoProfile", "-Command", &script])
         }
         Step::DeletePath(p) => {
             if p.is_dir() { std::fs::remove_dir_all(p) } else { std::fs::remove_file(p) }
                 .with_context(|| format!("删除 {} 失败", p.display()))
         }
+        Step::SaveData { profile, dest } => save_data(profile, dest),
         Step::KillProcesses => {
             // 没有匹配进程时 taskkill 也可能返回非零，这里不当作错误
             let _ = Command::new("taskkill").args(["/f", "/t", "/fi", &format!("USERNAME eq {user}")]).output();
@@ -703,7 +838,7 @@ fn execute(s: &Step, cfg: &Config) -> Result<()> {
                 .output()
                 .map(|o| o.status.success())
                 .unwrap_or(false);
-            if exists { run("reg", &["delete", HIDE_KEY, "/v", user, "/f"]) } else { Ok(()) }
+            if exists { exec("reg", &["delete", HIDE_KEY, "/v", user, "/f"]) } else { Ok(()) }
         }
         Step::DeleteCredential => cred::delete(user).map(|_| ()),
     }
@@ -921,12 +1056,271 @@ fn find_owned(sid: &str) -> Vec<PathBuf> {
     found
 }
 
-fn run(prog: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new(prog).args(args).status().with_context(|| format!("无法运行 {prog}"))?;
+fn exec(prog: &str, args: &[&str]) -> Result<()> {
+    let status = cmd::run_print(Command::new(prog).args(args))?;
     if !status.success() {
         bail!("{prog} {} 失败: {status}", args.join(" "));
     }
     Ok(())
+}
+
+/// 隔离账户的密码存在“运行本程序的账户”的凭据管理器里，快捷方式和交换文件夹也放在这个账户下。
+/// 标准用户在 UAC 窗口里输入另一个管理员的密码时，本程序以那个管理员的身份运行，装好后桌面上的账户用不了
+fn check_same_user() -> Result<()> {
+    let me = std::env::var("USERNAME").unwrap_or_default();
+    let Some(desktop) = session_user() else { return Ok(()) };
+    if !me.is_empty() && !desktop.is_empty() && !desktop.eq_ignore_ascii_case(&me) {
+        bail!(
+            "现在以 {me} 的身份运行，但桌面上登录的是 {desktop}。\n\
+             IsoBox 会把隔离账户的密码存进运行它的账户，这样装好后 {desktop} 用不了。\n\
+             请在 {desktop} 里操作，并且 {desktop} 需要是管理员账户"
+        );
+    }
+    Ok(())
+}
+
+/// 当前会话（桌面）上登录的用户名。服务等没有桌面的会话返回 None
+fn session_user() -> Option<String> {
+    use windows::Win32::System::RemoteDesktop::{
+        WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTSFreeMemory, WTSQuerySessionInformationW, WTSUserName,
+    };
+    let mut buf = PWSTR::null();
+    let mut len = 0u32;
+    unsafe {
+        WTSQuerySessionInformationW(Some(WTS_CURRENT_SERVER_HANDLE), WTS_CURRENT_SESSION, WTSUserName, &mut buf, &mut len)
+            .ok()?;
+        let name = buf.to_string().ok();
+        WTSFreeMemory(buf.0 as *mut _);
+        name.filter(|n| !n.is_empty())
+    }
+}
+
+/// 交换文件夹是隔离账户可以读写的地方，选错了会把保护打开一个大口子
+fn check_exchange_dir(p: &Path) -> Result<()> {
+    if !p.is_absolute() || paths::drive_letter(p).is_none() {
+        bail!("交换文件夹要写本地的完整路径，例如 D:\\Downloads\\IsoBox");
+    }
+    let lp = p.to_string_lossy().trim_end_matches('\\').to_lowercase();
+    if lp.len() <= 2 {
+        bail!("交换文件夹不能是整个盘，请在盘里建一个专用的文件夹");
+    }
+    let env_dir = |k: &str| std::env::var(k).ok().map(PathBuf::from);
+    let mut sensitive: Vec<PathBuf> = [
+        env_dir("SystemRoot"),
+        env_dir("ProgramW6432"),
+        env_dir("ProgramFiles(x86)"),
+        env_dir("ProgramData"),
+        env_dir("USERPROFILE"),
+        Some(PathBuf::from(format!("{}:\\Users", drives::system_drive()))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    sensitive.push(paths::expected_install_dir());
+    for s in sensitive {
+        let ls = s.to_string_lossy().trim_end_matches('\\').to_lowercase();
+        // 不能是这些目录本身或它们的上级；用户目录下的子文件夹（例如下载\IsoBox）可以
+        if ls == lp || ls.starts_with(&format!("{lp}\\")) {
+            bail!("{} 不能做交换文件夹：隔离软件会因此能读写 {}", p.display(), s.display());
+        }
+    }
+    if lp.starts_with(&format!("{}\\", paths::expected_install_dir().to_string_lossy().to_lowercase())) {
+        bail!("交换文件夹不能放在 IsoBox 的安装目录里");
+    }
+    Ok(())
+}
+
+/// 卸载时保留的数据放在哪里：交换文件夹里的“隔离账户的文件”；交换文件夹不在了就用下载文件夹里的
+fn keep_data_dir(cfg: &Config) -> Result<PathBuf> {
+    let base = match cfg.exchange_dir() {
+        Ok(x) if x.exists() => x,
+        _ => paths::default_exchange_dir()?,
+    };
+    Ok(base.join(KEEP_DIR))
+}
+
+/// 把个人文件夹里的文档、桌面等文件夹的内容移到 dest 下对应的中文名文件夹。已有同名文件时改名，不覆盖
+fn save_data(profile: &Path, dest: &Path) -> Result<()> {
+    let mut moved = 0;
+    for (from, to) in KEEP_FOLDERS {
+        let Ok(entries) = std::fs::read_dir(profile.join(from)) else { continue };
+        for e in entries.flatten() {
+            // desktop.ini 让资源管理器把文件夹显示成“文档”等名字，不属于数据
+            if e.file_name().eq_ignore_ascii_case("desktop.ini") {
+                continue;
+            }
+            let dir = dest.join(to);
+            std::fs::create_dir_all(&dir).with_context(|| format!("创建 {} 失败", dir.display()))?;
+            move_entry(&e.path(), &unique_path(&dir.join(e.file_name())))?;
+            moved += 1;
+        }
+    }
+    if moved == 0 {
+        println!("  这些文件夹都是空的，没有要保留的文件");
+        return Ok(());
+    }
+    // 同盘移动保留了原来的权限（只有隔离账户和管理员能访问）。改为继承交换文件夹的权限，你的账户才能打开
+    acl::reset_tree(dest)?;
+    // 所有者还是隔离账户，账户删除后会显示成未知账户。改成你自己，失败不影响使用
+    if let Ok(me) = std::env::var("USERNAME") {
+        let _ = acl::icacls(&[&dest.display().to_string(), "/setowner", &me, "/t", "/c", "/q"]);
+    }
+    println!("  已移动 {moved} 项到 {}", dest.display());
+    Ok(())
+}
+
+/// 移动文件或文件夹。同盘直接改名；跨盘复制后删除，不复制权限，新文件继承目标位置的权限
+fn move_entry(src: &Path, dst: &Path) -> Result<()> {
+    if std::fs::rename(src, dst).is_ok() {
+        return Ok(());
+    }
+    if src.is_dir() {
+        let status = cmd::run_print(Command::new("robocopy").args([
+            &src.display().to_string(),
+            &dst.display().to_string(),
+            "/E",
+            "/MOVE",
+            "/COPY:DAT",
+            "/DCOPY:DAT",
+            "/R:1",
+            "/W:1",
+            "/NFL",
+            "/NDL",
+            "/NJH",
+            "/NJS",
+            "/NP",
+        ]))?;
+        // robocopy 的返回码小于 8 都表示成功；/MOVE 全部移完后会删掉源文件夹
+        if status.code().unwrap_or(16) >= 8 || src.exists() {
+            bail!("移动 {} 失败，可能有文件正被占用", src.display());
+        }
+    } else {
+        std::fs::copy(src, dst).with_context(|| format!("复制 {} 失败", src.display()))?;
+        std::fs::remove_file(src).with_context(|| format!("删除 {} 失败，可能正被占用", src.display()))?;
+    }
+    Ok(())
+}
+
+/// p 已存在时，在名字后面加 (2)、(3)……
+fn unique_path(p: &Path) -> PathBuf {
+    if !p.exists() {
+        return p.to_path_buf();
+    }
+    let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = p.extension().map(|e| e.to_string_lossy().into_owned());
+    (2..)
+        .map(|i| match &ext {
+            Some(e) => p.with_file_name(format!("{stem} ({i}).{e}")),
+            None => p.with_file_name(format!("{stem} ({i})")),
+        })
+        .find(|c| !c.exists())
+        .unwrap()
+}
+
+/// 安装程序在显示页面前调用，每行一项，安装程序按前缀解析：
+///   account=ready|missing|foreign|nocred   隔离账户：可用、不存在、同名但不是 IsoBox 建的、密码不在当前账户里
+///   user=<隔离账户名>
+///   exchange=<交换文件夹>
+///   drive=<盘符>|<能否保护 1/0>|<默认是否选中 1/0>|<显示的文字>
+fn installer_info(cfg: &Config) {
+    let user = &cfg.sandbox_user;
+    let account = match lookup_sid(user) {
+        Err(_) => "missing",
+        Ok(_) if user_comment(user).ok().as_deref() != Some(MARKER) => "foreign",
+        Ok(_) if cred::load(user).is_err() => "nocred",
+        Ok(_) => "ready",
+    };
+    println!("account={account}");
+    println!("user={user}");
+    if let Ok(x) = cfg.exchange_dir() {
+        println!("exchange={}", x.display());
+    }
+    let selected = current_protect_list(cfg);
+    for d in drives::list().into_iter().filter(|d| d.ready) {
+        let l = d.letter;
+        if d.protect_blocker().is_none() {
+            let on = selected.iter().any(|p| paths::same_path(p, Path::new(&d.root())));
+            let label = if d.label.is_empty() { String::new() } else { format!("{}  ", d.label) };
+            let size = drives::human_size(d.total);
+            println!("drive={l}|1|{}|{l}:  {label}{}，{}，{size}", u8::from(on), d.describe_kind(), d.fs);
+        } else {
+            let why = if d.system {
+                "系统盘".to_string()
+            } else if d.kind != drives::Kind::Fixed {
+                d.describe_kind().to_string()
+            } else {
+                format!("{} 不支持权限控制", d.fs)
+            };
+            println!("drive={l}|0|0|{l}:（{why}）");
+        }
+    }
+}
+
+/// 把标准输出和标准错误转成带 BOM 的 UTF-16LE。
+/// 安装程序用 nsExec 运行本程序时能识别 UTF-16LE 并实时显示；Rust 的标准输出总是写 UTF-8，
+/// 所以把标准输出换成一个管道，后台线程把读到的 UTF-8 转码后写到原来的位置（控制台、管道或 --log 文件）
+struct Utf16Out {
+    write: HANDLE,
+    done: std::sync::mpsc::Receiver<()>,
+}
+
+impl Utf16Out {
+    fn start() -> Result<Self> {
+        use windows::Win32::{
+            Storage::FileSystem::{ReadFile, WriteFile},
+            System::{
+                Console::{GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle},
+                Pipes::CreatePipe,
+            },
+        };
+        let orig = unsafe { GetStdHandle(STD_OUTPUT_HANDLE)? };
+        let (mut read, mut write) = (HANDLE::default(), HANDLE::default());
+        // 句柄不可继承：子进程的输出都由 cmd::run_print 收集，不会直接写进来
+        unsafe {
+            CreatePipe(&mut read, &mut write, None, 0)?;
+            SetStdHandle(STD_OUTPUT_HANDLE, write)?;
+            SetStdHandle(STD_ERROR_HANDLE, write)?;
+        }
+        // HANDLE 不能跨线程传递，转成整数
+        let (orig, read) = (orig.0 as usize, read.0 as usize);
+        let (tx, done) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (orig, read) = (HANDLE(orig as *mut _), HANDLE(read as *mut _));
+            let put = |s: &str| {
+                let bytes: Vec<u8> = s.encode_utf16().flat_map(u16::to_le_bytes).collect();
+                let _ = unsafe { WriteFile(orig, Some(&bytes), None, None) };
+            };
+            put("\u{feff}");
+            let mut pending = Vec::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                let mut n = 0u32;
+                if unsafe { ReadFile(read, Some(&mut buf), Some(&mut n), None) }.is_err() || n == 0 {
+                    break;
+                }
+                pending.extend_from_slice(&buf[..n as usize]);
+                // 一个汉字的三个字节可能分两次读到，末尾不完整的留到下次
+                let cut = match std::str::from_utf8(&pending) {
+                    Err(e) if e.error_len().is_none() => e.valid_up_to(),
+                    _ => pending.len(),
+                };
+                put(&String::from_utf8_lossy(&pending[..cut]));
+                pending.drain(..cut);
+            }
+            put(&String::from_utf8_lossy(&pending));
+            let _ = unsafe { CloseHandle(read) };
+            let _ = tx.send(());
+        });
+        Ok(Self { write, done })
+    }
+
+    /// 写完剩下的输出：关闭管道的写入端，等后台线程转码完
+    fn finish(self) {
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+        let _ = unsafe { CloseHandle(self.write) };
+        let _ = self.done.recv_timeout(std::time::Duration::from_secs(5));
+    }
 }
 
 fn random_password() -> Result<String> {
@@ -952,5 +1346,38 @@ fn is_elevated() -> Result<bool> {
         let _ = CloseHandle(token);
         r?;
         Ok(elev.TokenIsElevated != 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unique_path_appends_a_number() {
+        let dir = std::env::temp_dir().join(format!("isobox-unique-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(unique_path(&dir.join("a.db")), dir.join("a.db"));
+        std::fs::write(dir.join("a.db"), "").unwrap();
+        assert_eq!(unique_path(&dir.join("a.db")), dir.join("a (2).db"));
+        std::fs::create_dir_all(dir.join("Tencent Files")).unwrap();
+        std::fs::create_dir_all(dir.join("Tencent Files (2)")).unwrap();
+        assert_eq!(unique_path(&dir.join("Tencent Files")), dir.join("Tencent Files (3)"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn exchange_dir_must_not_open_up_protected_places() {
+        assert!(check_exchange_dir(Path::new(r"D:\")).is_err());
+        assert!(check_exchange_dir(Path::new(r"relative\dir")).is_err());
+        assert!(check_exchange_dir(Path::new(r"C:\Users")).is_err());
+        assert!(check_exchange_dir(Path::new(r"C:\Windows")).is_err());
+        assert!(check_exchange_dir(&paths::expected_install_dir()).is_err());
+        assert!(check_exchange_dir(&paths::expected_install_dir().join("x")).is_err());
+        if let Ok(home) = std::env::var("USERPROFILE") {
+            assert!(check_exchange_dir(Path::new(&home)).is_err());
+            assert!(check_exchange_dir(&Path::new(&home).join(r"Downloads\IsoBox")).is_ok());
+        }
+        assert!(check_exchange_dir(Path::new(r"D:\Exchange")).is_ok());
     }
 }

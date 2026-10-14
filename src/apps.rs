@@ -101,7 +101,7 @@ pub fn add(cfg_path: &Path, cfg: &Config, o: &AddOptions) -> Result<()> {
         }
         (exe, f)
     } else {
-        let seven = cfg.sevenzip.clone().unwrap_or_else(|| unpack::DEFAULT_7Z.into());
+        let seven = unpack::sevenzip(cfg);
         let exe = unpack::unpack(&seven, &o.installer, &app_dir, o.exe.as_deref(), o.force, &|c| pick(c))?;
         let file = exe.file_name().unwrap().to_string_lossy().to_string();
         (
@@ -154,7 +154,7 @@ fn install_as_user(cfg: &Config, sb: &Sandbox, app_dir: &Path, o: &AddOptions) -
     let inst = tmp.join(o.installer.file_name().context("安装包没有文件名")?);
     std::fs::copy(&o.installer, &inst).context("复制安装包失败")?;
 
-    let seven = cfg.sevenzip.clone().unwrap_or_else(|| unpack::DEFAULT_7Z.into());
+    let seven = unpack::sevenzip(cfg);
     let kind = unpack::installer_kind(&seven, &o.installer);
     let dir = app_dir.display().to_string();
     let (exe_to_run, args) = match kind {
@@ -432,22 +432,19 @@ pub fn move_app(cfg_path: &Path, cfg: &Config, name: &str, to: char) -> Result<(
         std::fs::rename(&src, &dst).with_context(|| format!("移动失败，确认 {name} 已完全退出"))?;
     } else {
         // 跨盘：robocopy 移动，返回码小于 8 都表示成功
-        let status = Command::new("robocopy")
-            .args([
-                &src.display().to_string(),
-                &dst.display().to_string(),
-                "/E",
-                "/MOVE",
-                "/R:1",
-                "/W:1",
-                "/NFL",
-                "/NDL",
-                "/NJH",
-                "/NJS",
-                "/NP",
-            ])
-            .status()
-            .context("无法运行 robocopy")?;
+        let status = crate::cmd::run_print(Command::new("robocopy").args([
+            &src.display().to_string(),
+            &dst.display().to_string(),
+            "/E",
+            "/MOVE",
+            "/R:1",
+            "/W:1",
+            "/NFL",
+            "/NDL",
+            "/NJH",
+            "/NJS",
+            "/NP",
+        ]))?;
         if status.code().unwrap_or(16) >= 8 {
             bail!("robocopy 移动失败，返回码 {status}。原目录 {} 仍保留", src.display());
         }

@@ -377,9 +377,13 @@ function pageSettings() {
         <button class="btn ghost icon" title="在资源管理器中显示" data-action="open-path" data-path="${esc(ov.config_path)}">${icon('folder')}</button></div>
     </div>
     <h2>彻底卸载</h2>
-    <div class="danger-zone"><div class="grow" style="flex:1"><div class="title" style="color:var(--danger);font-weight:500">还原权限并删除隔离账户</div>
+    ${info.uninstaller
+    ? `<div class="danger-zone"><div class="grow" style="flex:1"><div class="title" style="color:var(--danger);font-weight:500">卸载 IsoBox</div>
+      <div class="muted small">撤销所有禁止规则，删除隔离账户、所有库里的软件和 IsoBox 本身。可以选择把聊天记录等文件保留到交换文件夹</div></div>
+      <button class="btn danger" data-action="uninstall">卸载</button></div>`
+    : `<div class="danger-zone"><div class="grow" style="flex:1"><div class="title" style="color:var(--danger);font-weight:500">还原权限并删除隔离账户</div>
       <div class="muted small">撤销所有禁止规则，删除隔离账户、所有库里的软件和聊天记录等数据。交换文件夹里的文件保留</div></div>
-      <button class="btn danger" data-action="uninstall" ${ov.account.exists ? '' : 'disabled'}>卸载</button></div>`;
+      <button class="btn danger" data-action="uninstall" ${ov.account.exists ? '' : 'disabled'}>卸载</button></div>`}`;
 }
 
 // ---------- 事件 ----------
@@ -432,8 +436,18 @@ const actions = {
     catch (e) { toast(String(e), 'error'); }
     refresh();
   },
-  uninstall: () => confirmDialog('彻底卸载？', '会撤销所有禁止规则，删除隔离账户、所有库里的软件，以及微信、QQ 等软件的聊天记录和登录信息。这一步无法撤销。交换文件夹里的文件会保留。', '卸载',
-    () => runAdmin('彻底卸载', ['uninstall', '--apply']), true),
+  uninstall: () => {
+    // 用安装程序装的：交给系统的卸载程序，它会顺带删除 IsoBox 本身，并询问是否保留聊天记录
+    if (S.info?.uninstaller) {
+      confirmDialog('卸载 IsoBox？', '接下来打开卸载程序。它会撤销所有禁止规则，删除隔离账户、所有库里的软件和 IsoBox 本身，并让你选择是否把聊天记录等文件保留到交换文件夹。IsoBox 界面会随之关闭。', '打开卸载程序',
+        async () => {
+          try { if (!(await invoke('run_uninstaller'))) toast('已取消'); } catch (e) { toast(String(e), 'error'); }
+        }, true);
+      return;
+    }
+    confirmDialog('彻底卸载？', '会撤销所有禁止规则，删除隔离账户、所有库里的软件，以及微信、QQ 等软件的聊天记录和登录信息。这一步无法撤销。交换文件夹里的文件会保留。', '卸载',
+      () => runAdmin('彻底卸载', ['uninstall', '--apply']), true);
+  },
 };
 
 let pendingConfirm = null;

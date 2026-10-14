@@ -64,9 +64,9 @@ async fn launch_app(name: String) -> Result<String, String> {
 async fn preview_installer(path: String) -> Result<unpack::Preview, String> {
     blocking(move || {
         let cfg = load_cfg()?;
-        let seven = cfg.sevenzip.clone().unwrap_or_else(|| unpack::DEFAULT_7Z.into());
+        let seven = unpack::sevenzip(&cfg);
         if !seven.exists() {
-            return Err(format!("找不到 7-Zip：{}", seven.display()));
+            return Err(format!("找不到 7-Zip：{}。重新运行 IsoBox 安装程序可以修复", seven.display()));
         }
         Ok(unpack::preview(&seven, Path::new(&path)))
     })
@@ -124,7 +124,18 @@ fn app_info() -> serde_json::Value {
         "version": env!("CARGO_PKG_VERSION"),
         "config": cfg_path().display().to_string(),
         "install_dir": paths::expected_install_dir().display().to_string(),
+        "uninstaller": elevate::uninstaller().is_some(),
     })
+}
+
+/// 运行系统的卸载程序，然后退出，免得界面占着要删除的文件。返回 false 表示在 UAC 窗口里取消了
+#[tauri::command]
+fn run_uninstaller(app: AppHandle) -> Result<bool, String> {
+    let started = elevate::start_uninstaller().map_err(|e| format!("{e:#}"))?;
+    if started {
+        app.exit(0);
+    }
+    Ok(started)
 }
 
 /// 托盘菜单：每个软件一项“启动”，然后是打开主窗口和退出
@@ -184,7 +195,8 @@ fn main() {
             set_tray_autostart,
             open_path,
             refresh_tray,
-            app_info
+            app_info,
+            run_uninstaller
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

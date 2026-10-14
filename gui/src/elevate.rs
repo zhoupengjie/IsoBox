@@ -11,7 +11,7 @@ use windows::{
         System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject},
         UI::{
             Shell::{SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW},
-            WindowsAndMessaging::SW_HIDE,
+            WindowsAndMessaging::{SW_HIDE, SW_SHOWNORMAL},
         },
     },
     core::{HRESULT, PCWSTR},
@@ -37,7 +37,7 @@ fn setup_exe() -> Result<PathBuf> {
     if local.exists() {
         return Ok(local);
     }
-    bail!("找不到 isobox-setup.exe，请先部署 IsoBox")
+    bail!("找不到 isobox-setup.exe，请先运行 IsoBox 安装程序")
 }
 
 /// 按 Windows 命令行规则给参数加引号
@@ -107,6 +107,30 @@ pub fn run_setup(args: &[String]) -> Result<AdminResult> {
     let output = std::fs::read(&log).map(|b| String::from_utf8_lossy(&b).to_string()).unwrap_or_default();
     let _ = std::fs::remove_file(&log);
     Ok(AdminResult { code: code as i32, output, cancelled: false })
+}
+
+/// 安装程序放在安装目录里的卸载程序。开发时直接运行的版本没有它
+pub fn uninstaller() -> Option<PathBuf> {
+    Some(paths::expected_install_dir().join("uninstall.exe")).filter(|p| p.exists())
+}
+
+/// 启动系统的卸载程序。它自己会请求管理员权限，并在开始卸载前结束界面进程。
+/// 返回 false 表示用户在 UAC 窗口里点了“否”
+pub fn start_uninstaller() -> Result<bool> {
+    let exe = uninstaller().context("找不到卸载程序 uninstall.exe，请从 Windows 设置的“应用”里卸载")?;
+    let file = to_wide(&exe.to_string_lossy());
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOASYNC,
+        lpFile: PCWSTR(file.as_ptr()),
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
+    };
+    match unsafe { ShellExecuteExW(&mut info) } {
+        Ok(()) => Ok(true),
+        Err(e) if e.code() == HRESULT::from_win32(ERROR_CANCELLED.0) => Ok(false),
+        Err(e) => Err(e).context("无法启动卸载程序"),
+    }
 }
 
 #[cfg(test)]
