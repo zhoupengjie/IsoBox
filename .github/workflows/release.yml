@@ -4,7 +4,7 @@
 # 步骤：scripts\set-version.ps1 1.2.3 → 在 CHANGELOG.md 写上 [1.2.3] 一节 → 提交 → 等 CI 通过
 #       → git tag v1.2.3 → git push origin v1.2.3
 #
-# 代码签名还没接上：申请到 SignPath 等签名服务后，在“生成安装包”之后加签名步骤，见 HANDOFF.md 第 7 节。
+# 代码签名还没接上：申请到 SignPath 等签名服务后，在“生成安装包”之后加签名步骤，见 ROADMAP.md 阶段四“代码签名”。
 name: Release
 
 on:

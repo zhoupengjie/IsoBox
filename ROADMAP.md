@@ -50,7 +50,7 @@ IsoBox 让不信任的桌面软件以独立的本地账户运行，读不到你�
 
 ## 阶段四：发布
 
-- [x] GitHub Actions：clippy、单元测试、生成安装包；在全新的 Windows 运行器上跑完整的安装、使用、卸载测试（还没在 GitHub 上运行过）
+- [x] GitHub Actions：clippy、单元测试、生成安装包；在全新的 Windows 运行器上跑完整的安装、使用、卸载测试，已在 GitHub 上通过
 - [x] 发布流程：推送 `v*` 标签生成安装包、SHA-256 和 Release 草稿，说明取自 CHANGELOG.md；`scripts/set-version.ps1` 一次改好三处版本号
 - [x] 第三方许可证声明：cargo about 生成，随安装包分发，界面“设置”里可以打开；安装包附 7-Zip 的许可证
 - [x] 代码签名钩子：`build.ps1 -SignCommand` 签四个程序、卸载程序和安装程序
@@ -59,11 +59,20 @@ IsoBox 让不信任的桌面软件以独立的本地账户运行，读不到你�
 - [x] 沙盒测试从 deploy.ps1 版本升级（25 项）：原开发机就是这种情况
 - [x] 代码审查后修复 10 个问题：交换文件夹在别的盘时卸载（保留聊天记录）失败、安装中途失败后无法修复、交换文件夹检查不严、
       卸载时 isobox-setup.exe 不见了却报告成功、配置损坏时漏撤文件夹上的保护等。沙盒测试增加到 126 项
-- [x] 开源许可证：GPL-3.0-or-later。安装包附 `licenses\LICENSE.txt`，界面“设置”里显示
-- [ ] 推送后确认 CI 通过
-- [ ] 申请代码签名（优先 SignPath Foundation），接入发布流程
-- [ ] 真机验证安装包，发布 0.1.0
-- [ ] 找几位朋友在不同电脑上试用
+- [x] 开源许可证：GPL-3.0-or-later。安装包附 `licenses\LICENSE.txt`，界面“设置”里显示。沙盒测试 127 项
+- [x] 真机从 deploy.ps1 版本升级：账户、配置、保护、聊天记录保留，隔离软件升级期间不中断，旧脚本和开始菜单项删掉，
+      完成页以普通权限打开界面
+- [ ] 真机还要看：托盘图标的显示；从界面发起的管理员操作（UAC）；界面里点“卸载”打开卸载程序；静默更新时托盘关闭后能否重新打开
+- [ ] 仓库设置里打开 Private vulnerability reporting（Settings → Code security），SECURITY.md 里的“私下报告”链接才能用
+- [ ] 代码签名：申请 SignPath Foundation（开源项目免费，要求 OSI 认可的许可证和公开仓库，都已满足）。
+      本地有证书时直接用 `build.ps1 -SignCommand`。SignPath 在它的服务器上签名，发布流程要改成三段：
+      1. 先签四个程序（构建产物交给 SignPath 的 GitHub Action，取回签好的文件）
+      2. 卸载程序现在由 makensis 打包时生成，SignPath 签不到：给 `isobox.nsi` 加一个只生成卸载程序的模式
+         （`.onInit` 里 `WriteUninstaller` 后退出），生成后送去签名，再用 `File` 把签好的卸载程序打进安装包
+      3. 最后签安装程序
+- [ ] 发布 0.1.0：CHANGELOG 里的日期改成发布日，提交，打标签 `v0.1.0` 推送，检查 Release 草稿后点“发布”
+- [ ] 试用：把 `docs/testing-checklist.md` 发给几位朋友，覆盖 Windows 10、只有一个盘、下载文件夹在别的盘、有外接硬盘、
+      装了杀毒软件等情况
 
 ## 已知的安全边界
 
