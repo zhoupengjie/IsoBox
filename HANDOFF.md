@@ -28,7 +28,7 @@ CI（`.github/workflows/ci.yml`）和发布（`release.yml`）**还没有在 Git
 在原开发机上用旧的 deploy.ps1 部署并日常使用：系统盘的库里装着微信和 QQ，D 盘受保护。**还没在真机上实测的**：
 
 - 安装包本身：真机有 UAC，沙盒里没有。重点看完成页“打开 IsoBox”是否以普通权限启动界面（任务管理器里 isobox-gui.exe 的“提升”列应为“否”）
-- 在原开发机上从 deploy.ps1 部署的版本升级：应识别为已安装（只更新程序文件），删掉旧的 add-app.ps1、remove-app.ps1 和开始菜单里的“IsoBox 添加软件”“IsoBox 移除软件”
+- 在原开发机上从 deploy.ps1 部署的版本升级：沙盒里已经验证（`run.ps1 -UpgradeFromDeploy`，25 项全部通过：账户、配置、保护、软件、聊天记录都保留，旧脚本和开始菜单项删掉，软件照常隔离运行，之后卸载干净），真机上还要再走一遍
 - 界面里点“卸载”打开卸载程序；静默更新时托盘关闭后能否重新打开
 - 从界面发起的管理员操作（UAC 路径）、托盘图标的显示（阶段二遗留）
 
@@ -97,7 +97,7 @@ Cargo 工作区，两个包：根目录的 `isobox`（核心库和三个命令�
 | `src/shortcut.rs` | 快捷方式（PowerShell 写、COM 读） |
 | `src/config.rs` | 配置；修改配置时保留注释，写入前先解析验证；`salvage()` 在配置损坏时尽量读出账户名，保证还能卸载 |
 | `src/appcontainer.rs` | AppContainer 模式（保留，但微信、QQ 跑不了，见第 6 节） |
-| `tests/sandbox/` | 沙盒测试：`run.ps1` 在宿主机运行；`run-in-sandbox.ps1` 是端到端测试（CI 也直接在运行器上跑它），`ui-tour.ps1` 是界面巡检（`-UiTour`）。`run.ps1 -StageOnly` 只准备安装包和测试包 |
+| `tests/sandbox/` | 沙盒测试：`run.ps1` 在宿主机运行；`run-in-sandbox.ps1` 是端到端测试（CI 也直接在运行器上跑它），`ui-tour.ps1` 是界面巡检（`-UiTour`），`upgrade-from-deploy.ps1` 测从 deploy.ps1 时代的版本升级（`-UpgradeFromDeploy`，旧版本 5eb21d1 用 git worktree 检出到 `target\old-src` 编译）。`run.ps1 -StageOnly` 只准备安装包和测试包 |
 | `examples/probe.rs` | 测试用探测程序：以隔离账户身份尝试各种读写 |
 | `isobox.toml` | 配置模板。实际生效的是安装目录里那份 |
 
@@ -179,6 +179,7 @@ Cargo 工作区，两个包：根目录的 `isobox`（核心库和三个命令�
 powershell -ExecutionPolicy Bypass -File installer\build.ps1 [-NoBuild] [-Preview] [-SignCommand 'signtool sign ... "%1"']
 powershell -ExecutionPolicy Bypass -File tests\sandbox\run.ps1             # 端到端测试
 powershell -ExecutionPolicy Bypass -File tests\sandbox\run.ps1 -UiTour     # 截取安装、卸载每一页，存到 target\sandbox-test\logs\shots
+powershell -ExecutionPolicy Bypass -File tests\sandbox\run.ps1 -UpgradeFromDeploy   # 从 deploy.ps1 版本升级再卸载（第一次要编译旧版本）
 
 # 发布：改版本号、写 CHANGELOG、提交、CI 通过后打标签
 powershell -ExecutionPolicy Bypass -File scripts\set-version.ps1 0.2.0
