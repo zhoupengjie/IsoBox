@@ -5,9 +5,10 @@
 # 所以直接在上面运行沙盒测试用的 tests\sandbox\run-in-sandbox.ps1。
 name: CI
 
+# 推送任何分支都运行（标签由 release.yml 处理）；别人从分叉仓库提的 PR 也运行
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 
