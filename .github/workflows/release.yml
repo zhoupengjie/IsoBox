@@ -19,7 +19,7 @@ jobs:
     name: 生成安装包和发布草稿
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: 标签要和版本号一致
         shell: powershell

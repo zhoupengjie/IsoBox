@@ -24,7 +24,7 @@ jobs:
     name: 编译、单元测试、安装包
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -51,11 +51,15 @@ jobs:
       - name: 生成安装包和测试包
         shell: powershell
         run: |
+          [Console]::OutputEncoding = [Text.Encoding]::UTF8   # 运行器是英文系统，不设的话中文标题会变成问号
           powershell -NoProfile -ExecutionPolicy Bypass -File tests\sandbox\run.ps1 -StageOnly
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sha = Get-Item target\installer\IsoBox-*-setup.exe.sha256 | Get-Content -Raw
+          Write-Host "::notice title=安装包::$($sha.Trim())"
+          [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "### 安装包`n`n``$($sha.Trim())```n", (New-Object Text.UTF8Encoding $false))
 
       - name: 上传安装包
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: installer
           path: |
@@ -64,7 +68,7 @@ jobs:
           if-no-files-found: error
 
       - name: 上传测试包
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-stage
           path: target/sandbox-test/stage
@@ -75,9 +79,9 @@ jobs:
     needs: build
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: test-stage
           path: stage
@@ -91,15 +95,25 @@ jobs:
       - name: 运行测试
         shell: powershell
         run: |
+          [Console]::OutputEncoding = [Text.Encoding]::UTF8
           $logs = Join-Path $env:RUNNER_TEMP 'isobox-logs'
           powershell -NoProfile -ExecutionPolicy Bypass -File tests\sandbox\run-in-sandbox.ps1 -Stage "$env:GITHUB_WORKSPACE\stage" -Logs $logs
-          Get-Content "$logs\result.txt" -Encoding UTF8
-          $s = Select-String -Path "$logs\result.txt" -Pattern 'SUMMARY passed=(\d+) failed=(\d+)'
+          $lines = @(Get-Content "$logs\result.txt" -Encoding UTF8)
+          $lines
+          # 结果写在运行页面上：摘要里是完整结果，失败和跳过的检查另外标出来
+          $md = @('### 安装、使用、卸载', '', '```') + $lines + @('```', '')
+          [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, ($md -join "`n"), (New-Object Text.UTF8Encoding $false))
+          foreach ($l in $lines) {
+            if ($l -like 'FAIL*') { Write-Host "::error title=失败::$l" }
+            elseif ($l -like 'SKIP*') { Write-Host "::warning title=跳过::$l" }
+          }
+          $s = $lines | Select-String 'SUMMARY passed=(\d+) failed=(\d+)'
+          if ($s) { Write-Host "::notice title=安装、使用、卸载::$($s.Line)" }
           if (-not $s -or [int]$s.Matches[0].Groups[2].Value -ne 0) { exit 1 }
 
       - name: 上传测试记录
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lifecycle-logs
           path: ${{ runner.temp }}/isobox-logs
