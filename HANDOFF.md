@@ -19,11 +19,11 @@ IsoBox 让不信任的 Windows 桌面软件（起因是微信、QQ、网盘这�
 | 一、核心重构 | 库、自动识别硬盘、权限备份和还原、固定安装位置、迁移、沙盒自动测试 | 完成 |
 | 二、图形界面 | Tauri 主程序（软件、库、保护状态、设置、添加软件向导）和托盘 | 完成 |
 | 三、安装程序 | NSIS 图形和静默安装、保护设置页、捆绑 7-Zip、系统卸载入口、卸载时保留聊天记录 | 完成 |
-| 四、发布 | CI、发布流程、第三方许可证声明、签名钩子、文档 | **进行中**：待作者决定许可证、推送后验证 CI、申请代码签名、试用 |
+| 四、发布 | CI、发布流程、第三方许可证声明、签名钩子、文档 | **进行中**：待作者决定许可证、申请代码签名、真机验证、试用 |
 
 测试现状：单元测试 17 个（`cargo test --workspace`），Windows 沙盒端到端测试 126 项（从运行安装包开始，到运行卸载程序结束），从 deploy.ps1 版本升级 25 项，全部通过。另有界面巡检：在沙盒里用默认选择点完安装和卸载的每一页并截图（`run.ps1 -UiTour`）。
 
-CI（`.github/workflows/ci.yml`）和发布（`release.yml`）**还没有在 GitHub 上运行过**，只用 actionlint 检查过语法、在本机验证过里面的 PowerShell 片段。第一次推送后要看它们是否通过，见第 7 节。
+CI（`.github/workflows/ci.yml`）已经在 GitHub 上通过：在全新的 windows-2025 运行器上，安装、使用、卸载测试 126 项全部通过，没有跳过（运行器有桌面会话，界面检查也跑了）。结果显示在运行页面的摘要和注释里，不用下载构建产物；测试记录在构建产物 `lifecycle-logs` 里（`commands.txt` 有每条命令的完整输出）。分支 `stage3-installer`、`stage4-release` 已推送，main 还停在阶段一、二，合并由作者决定。发布流程 `release.yml` 还没运行过（要推送标签）。
 
 在原开发机上用旧的 deploy.ps1 部署并日常使用：系统盘的库里装着微信和 QQ，D 盘受保护。**还没在真机上实测的**：
 
@@ -161,11 +161,7 @@ Cargo 工作区，两个包：根目录的 `isobox`（核心库和三个命令�
 还要做的，按顺序：
 
 1. **作者决定 IsoBox 的许可证**。之后：加 `LICENSE` 文件；在 `Cargo.toml` 和 `gui/Cargo.toml` 写 `license = "..."`（cargo about 现在会提示 isobox 没有 license 字段）；README 最后一节改掉“尚未确定”；安装包里把 IsoBox 自己的许可证也放进 `licenses\`（`isobox.nsi` 的 `File` 和 `build.ps1` 的准备文件两处）。SignPath Foundation 只接受 OSI 认可许可证的开源项目
-2. **推送分支，看 CI**。最可能出问题的是 `lifecycle` 任务，因为运行器不是沙盒：
-   - 运行器上能否用 diskpart 挂虚拟磁盘 T:（不能的话 T: 相关的检查会被跳过，但“virtual disk T: available”会失败）
-   - 以隔离账户身份启动（CreateProcessWithLogonW）在运行器上是否可用
-   - 运行器有没有桌面会话：没有时界面检查自动跳过（看 result.txt 里的 SKIP）
-   - 测试记录在构建产物 `lifecycle-logs` 里，`commands.txt` 有每条命令的完整输出
+2. **合并到 main**：`stage4-release` 包含阶段三和阶段四，CI 已通过，快进合并即可
 3. **在仓库设置里打开 Private vulnerability reporting**（Settings → Code security），SECURITY.md 和 Issue 模板里的“私下报告”链接才能用
 4. **真机走一遍安装包**（第 2 节的清单），尤其是原开发机从 deploy.ps1 版本升级
 5. **代码签名**：申请 SignPath Foundation（开源项目免费，需要先定许可证、公开仓库）。本地有证书时直接用 `build.ps1 -SignCommand`，会签四个程序、卸载程序和安装程序。SignPath 是在它的服务器上签名，要改成两段：
