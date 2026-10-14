@@ -6,7 +6,7 @@ window.__TAURI__ = {
       await new Promise((r) => setTimeout(r, 150));
       switch (cmd) {
         case 'overview': return JSON.parse(JSON.stringify(window.MOCK_OVERVIEW));
-        case 'app_info': return { version: '0.1.0', config: window.MOCK_OVERVIEW.config_path, install_dir: window.MOCK_OVERVIEW.install_dir, uninstaller: true };
+        case 'app_info': return { version: '0.1.0', config: window.MOCK_OVERVIEW.config_path, install_dir: window.MOCK_OVERVIEW.install_dir, uninstaller: true, notices: 'C:\\Program Files\\IsoBox\\licenses\\THIRD-PARTY-NOTICES.txt' };
         case 'run_uninstaller': return true;
         case 'preview_installer': await new Promise((r) => setTimeout(r, 800)); return window.MOCK_PREVIEW;
         case 'launch_app': return `已以 isobox 身份启动 ${args.name}（模拟）`;

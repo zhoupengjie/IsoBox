@@ -1,0 +1,42 @@
+name: 问题反馈
+description: 安装、使用或卸载 IsoBox 时遇到的问题
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        谢谢反馈。**安全问题**（例如隔离软件读到了受保护的文件）请不要在这里公开，按 SECURITY.md 私下报告。
+  - type: input
+    id: version
+    attributes:
+      label: IsoBox 版本
+      description: IsoBox 窗口左下角，或安装包的文件名
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      description: 设置 → 系统 → 系统信息
+      placeholder: Windows 11 专业版 24H2
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 电脑情况
+      description: 有几个硬盘、格式；下载文件夹在哪；日常账户是否管理员；杀毒软件
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 在哪一步、做了什么、看到了什么（可以贴截图）、本来应该怎样
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: 状态输出
+      description: 在终端里运行 "C:\Program Files\IsoBox\isobox.exe" status 并贴上输出。里面有路径和账户名，发之前看一下
+      render: text

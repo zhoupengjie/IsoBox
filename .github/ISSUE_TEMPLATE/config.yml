@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 安全问题
+    url: https://github.com/zhoupengjie/IsoBox/security/advisories/new
+    about: 隔离被绕过、权限设置有漏洞等，请在这里私下报告

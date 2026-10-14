@@ -375,6 +375,8 @@ function pageSettings() {
         <button class="btn ghost icon" title="打开" data-action="open-path" data-path="${esc(info.install_dir || ov.install_dir)}">${icon('folder')}</button></div>
       <div class="row"><div class="grow"><div class="title">配置文件</div><div class="sub path">${esc(ov.config_path)}</div></div>
         <button class="btn ghost icon" title="在资源管理器中显示" data-action="open-path" data-path="${esc(ov.config_path)}">${icon('folder')}</button></div>
+      ${info.notices ? `<div class="row"><div class="grow"><div class="title">第三方许可证</div><div class="sub">IsoBox 使用的开源组件（7-Zip、Rust 库等）及其许可证</div></div>
+        <button class="btn ghost icon" title="在资源管理器中显示" data-action="open-path" data-path="${esc(info.notices)}">${icon('folder')}</button></div>` : ''}
     </div>
     <h2>彻底卸载</h2>
     ${info.uninstaller

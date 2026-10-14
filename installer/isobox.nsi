@@ -3,10 +3,12 @@
 ;
 ; 需要的定义（build.ps1 会传入）：
 ;   VERSION  版本号，例如 0.1.0
-;   STAGE    准备好的文件：四个 exe、isobox.toml、notice.txt、7-Zip\7z.exe、7z.dll、License.txt
+;   STAGE    准备好的文件：四个 exe、isobox.toml、notice.txt、sidebar.bmp、7-Zip\7z.exe、7z.dll、License.txt、
+;            licenses\THIRD-PARTY-NOTICES.txt
 ;   OUTFILE  生成的安装程序
 ;   ICON     安装程序图标
 ;   PREVIEW  可选。只用来看界面：普通权限运行，不修改系统
+;   SIGN_NSH 可选。签名命令（!finalize、!uninstfinalize），由 build.ps1 -SignCommand 生成
 ;
 ; 命令行参数（静默安装 /S 时使用）：
 ;   /PROTECT=D:\;E:\     要保护的位置，分号分隔；/PROTECT=none 不保护任何盘。不写时自动保护所有内置非系统盘
@@ -67,7 +69,14 @@ Var KeepCheckbox
 Var Forced
 
 ; ---------- 页面 ----------
+; 代码签名（可选）：build.ps1 生成的 sign.nsh 用 !finalize 签安装程序、!uninstfinalize 签卸载程序
+!ifdef SIGN_NSH
+  !include "${SIGN_NSH}"
+!endif
+
 !define MUI_ICON "${ICON}"
+!define MUI_WELCOMEFINISHPAGE_BITMAP "${STAGE}\sidebar.bmp"
+!define MUI_UNWELCOMEFINISHPAGE_BITMAP "${STAGE}\sidebar.bmp"
 !define MUI_UNICON "${ICON}"
 !define MUI_ABORTWARNING
 !define MUI_UNABORTWARNING
@@ -207,6 +216,7 @@ Function CheckForeign
       ${Case} "backup"
       ${Case} "icons"
       ${Case} "7-Zip"
+      ${Case} "licenses"
       ${Case} "add-app.ps1"
       ${Case} "remove-app.ps1"
         ${Break}
@@ -590,6 +600,8 @@ Section "IsoBox" SecMain
   File "${STAGE}\7-Zip\7z.exe"
   File "${STAGE}\7-Zip\7z.dll"
   File "${STAGE}\7-Zip\License.txt"
+  SetOutPath "$INSTDIR\licenses"
+  File "${STAGE}\licenses\THIRD-PARTY-NOTICES.txt"
   SetOutPath "$INSTDIR"
   ; 安装目录里的配置才是实际生效的，更新时绝不覆盖
   ${IfNot} ${FileExists} "$INSTDIR\isobox.toml"
@@ -809,6 +821,7 @@ Section "Uninstall"
   Delete "$INSTDIR\isobox.toml"
   Delete "$INSTDIR\isobox.toml.template"
   RMDir /r "$INSTDIR\7-Zip"
+  RMDir /r "$INSTDIR\licenses"
   RMDir /r "$INSTDIR\icons"
   ${If} $Forced == 0
     ; 禁止规则都已撤销，修改前的权限备份不再需要

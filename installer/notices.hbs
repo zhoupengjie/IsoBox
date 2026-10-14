@@ -1,0 +1,28 @@
+IsoBox 使用的第三方组件及其许可证
+==================================
+
+本文件由 installer\build.ps1 调用 cargo about 生成，随 IsoBox 一起分发，不要手动编辑。
+
+- 7-Zip（7z.exe、7z.dll）：GNU LGPL，部分代码为 BSD 许可证，RAR 解压代码另有 unRAR 限制。
+  完整条款见安装目录里的 7-Zip\License.txt，源代码见 https://www.7-zip.org/
+- 安装程序由 NSIS 生成：zlib/libpng 许可证，https://nsis.sourceforge.io/
+- IsoBox 的界面使用系统自带的 Microsoft Edge WebView2 运行库，不随 IsoBox 分发。
+
+下面是编译进 IsoBox 程序的 Rust 库，按许可证分组。
+
+{{#each overview}}
+  {{{name}}}（{{{id}}}）：{{count}} 个库
+{{/each}}
+
+{{#each licenses}}
+------------------------------------------------------------------------
+{{{name}}}（{{{id}}}）
+
+使用这个许可证的库：
+{{#each used_by}}
+  - {{{crate.name}}} {{{crate.version}}}{{#if crate.repository}}  {{{crate.repository}}}{{/if}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

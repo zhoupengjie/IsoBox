@@ -7,9 +7,11 @@
 #   -UiTour   instead click through the installer and uninstaller pages with the default choices and
 #             save a screenshot of each page to target\sandbox-test\logs\shots (to look at the pages)
 #   -NoBuild  reuse the newest installer in target\installer
+#   -StageOnly  only prepare target\sandbox-test\stage (installer and test package) and stop.
+#               CI does this, then runs run-in-sandbox.ps1 directly on its throwaway runner
 # Keep this file ASCII.
 
-param([int]$TimeoutMinutes = 20, [switch]$UiTour, [switch]$NoBuild)
+param([int]$TimeoutMinutes = 20, [switch]$UiTour, [switch]$NoBuild, [switch]$StageOnly)
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $work = Join-Path $root 'target\sandbox-test'
@@ -17,7 +19,7 @@ $stage = Join-Path $work 'stage'
 $logs = Join-Path $work 'logs'
 $sevenDir = 'C:\Program Files\7-Zip'
 
-if (Get-Process WindowsSandboxRemoteSession, WindowsSandboxServer -ErrorAction SilentlyContinue) {
+if (-not $StageOnly -and (Get-Process WindowsSandboxRemoteSession, WindowsSandboxServer -ErrorAction SilentlyContinue)) {
     throw 'Another Windows Sandbox is running. Close it first.'
 }
 
@@ -42,6 +44,7 @@ Copy-Item "$root\target\release\examples\probe.exe" "$work\pkg\IsoProbe.exe"
 Copy-Item "$root\target\release\examples\probe.exe" "$work\pkg\unins000.exe"
 & "$sevenDir\7z.exe" a -bso0 -bsp0 "-sfx$sevenDir\7z.sfx" "$stage\test\probe-setup.exe" "$work\pkg\*"
 if ($LASTEXITCODE -ne 0) { throw '7z sfx failed' }
+if ($StageOnly) { Write-Host "Staged in $stage"; exit 0 }
 
 $wsb = @"
 <Configuration>

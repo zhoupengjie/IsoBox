@@ -19,9 +19,11 @@ IsoBox 让不信任的 Windows 桌面软件（起因是微信、QQ、网盘这�
 | 一、核心重构 | 库、自动识别硬盘、权限备份和还原、固定安装位置、迁移、沙盒自动测试 | 完成 |
 | 二、图形界面 | Tauri 主程序（软件、库、保护状态、设置、添加软件向导）和托盘 | 完成 |
 | 三、安装程序 | NSIS 图形和静默安装、保护设置页、捆绑 7-Zip、系统卸载入口、卸载时保留聊天记录 | 完成 |
-| 四、发布 | CI、开源许可证、代码签名、文档、试用 | **下一步** |
+| 四、发布 | CI、发布流程、第三方许可证声明、签名钩子、文档 | **进行中**：待作者决定许可证、推送后验证 CI、申请代码签名、试用 |
 
-测试现状：单元测试 16 个（`cargo test --workspace`），Windows 沙盒端到端测试 112 项（从运行安装包开始，到运行卸载程序结束），全部通过。另有界面巡检：在沙盒里用默认选择点完安装和卸载的每一页并截图（`run.ps1 -UiTour`）。
+测试现状：单元测试 16 个（`cargo test --workspace`），Windows 沙盒端到端测试 113 项（从运行安装包开始，到运行卸载程序结束），全部通过。另有界面巡检：在沙盒里用默认选择点完安装和卸载的每一页并截图（`run.ps1 -UiTour`）。
+
+CI（`.github/workflows/ci.yml`）和发布（`release.yml`）**还没有在 GitHub 上运行过**，只用 actionlint 检查过语法、在本机验证过里面的 PowerShell 片段。第一次推送后要看它们是否通过，见第 7 节。
 
 在原开发机上用旧的 deploy.ps1 部署并日常使用：系统盘的库里装着微信和 QQ，D 盘受保护。**还没在真机上实测的**：
 
@@ -41,7 +43,7 @@ IsoBox 让不信任的 Windows 桌面软件（起因是微信、QQ、网盘这�
 2. **Rust**（MSVC 工具链，项目用 edition 2024）：`winget install Rustlang.Rustup`
 3. **7-Zip**，装在默认位置 `C:\Program Files\7-Zip`：`winget install 7zip.7zip`。打包时把它的 7z.exe、7z.dll 捆绑进安装包，测试时用它做测试用的安装包
 4. **Windows 沙盒**：在“启用或关闭 Windows 功能”里勾选 Windows 沙盒，重启
-5. **NSIS 不用装**：`installer\build.ps1` 找不到时自动下载 3.13 绿色版到 `target\tools` 并核对 SHA-256
+5. **NSIS 和 cargo-about 不用装**：`installer\build.ps1` 会自动下载 NSIS 3.13 绿色版到 `target\tools`（核对 SHA-256，固定用这个版本，要用别的设 `NSIS_HOME`），没有 cargo-about 时用 cargo binstall 或 cargo install 装上
 6. 可选：**Node.js**（只用于在浏览器里预览界面）、**gh**（GitHub 命令行）
 
 然后：
@@ -77,6 +79,12 @@ Cargo 工作区，两个包：根目录的 `isobox`（核心库和三个命令�
 | `installer/isobox.nsi` | 安装和卸载程序（NSIS，中文界面）。文件头注释列出了所有命令行参数和退出码 |
 | `installer/build.ps1` | 生成安装包：编译、准备文件、捆绑 7-Zip、调用 makensis；`-Preview` 另外生成只看界面、不改系统的预览版 |
 | `installer/notice.txt` | 安装向导“使用前须知”页的内容 |
+| `installer/notices.hbs`、`about.toml` | 第三方许可证声明的模板和允许的许可证列表。`build.ps1` 用 cargo about 生成 `licenses\THIRD-PARTY-NOTICES.txt` 打进安装包。新依赖用了列表外的许可证时构建会失败 |
+| `scripts/set-version.ps1` | 一次改好三处版本号并更新 Cargo.lock |
+| `.github/workflows/ci.yml` | 推送和 PR 时：clippy、单元测试、生成安装包；再在新的 Windows 运行器上跑一遍 `run-in-sandbox.ps1` |
+| `.github/workflows/release.yml` | 推送 `v1.2.3` 标签时：生成安装包，建 GitHub Release 草稿（说明取自 CHANGELOG.md） |
+| `docs/user-guide.md`、`docs/testing-checklist.md` | 使用说明、给试用者的清单 |
+| `SECURITY.md`、`CHANGELOG.md` | 威胁模型和漏洞报告方式；更新记录 |
 | `src/status.rs` | 汇总所有状态（界面和 `status --json` 共用） |
 | `src/apps.rs` | 添加、移除、移动软件 |
 | `src/library.rs` | 库：`<盘>:\Program Files\IsoBox`，标记文件 `library.toml`，`apps\` 目录 |
@@ -89,7 +97,7 @@ Cargo 工作区，两个包：根目录的 `isobox`（核心库和三个命令�
 | `src/shortcut.rs` | 快捷方式（PowerShell 写、COM 读） |
 | `src/config.rs` | 配置；修改配置时保留注释，写入前先解析验证；`salvage()` 在配置损坏时尽量读出账户名，保证还能卸载 |
 | `src/appcontainer.rs` | AppContainer 模式（保留，但微信、QQ 跑不了，见第 6 节） |
-| `tests/sandbox/` | 沙盒测试：`run.ps1` 在宿主机运行；`run-in-sandbox.ps1` 是端到端测试，`ui-tour.ps1` 是界面巡检（`-UiTour`），都在沙盒里执行 |
+| `tests/sandbox/` | 沙盒测试：`run.ps1` 在宿主机运行；`run-in-sandbox.ps1` 是端到端测试（CI 也直接在运行器上跑它），`ui-tour.ps1` 是界面巡检（`-UiTour`）。`run.ps1 -StageOnly` 只准备安装包和测试包 |
 | `examples/probe.rs` | 测试用探测程序：以隔离账户身份尝试各种读写 |
 | `isobox.toml` | 配置模板。实际生效的是安装目录里那份 |
 
@@ -97,7 +105,7 @@ Cargo 工作区，两个包：根目录的 `isobox`（核心库和三个命令�
 
 没有用 Tauri 自带的 NSIS 打包（`gui/tauri.conf.json` 的 `bundle.active` 仍是 false），因为它满足不了这几点：不显示目录选择、固定装到 Program Files\IsoBox；安装向导里的保护设置页；更新时绝不能运行旧版的卸载（Tauri 的模板升级时会先卸载旧版，对 IsoBox 来说等于删掉隔离账户和聊天记录）；卸载时只删自己的文件。自己的脚本更短，也更好测。
 
-版本号写在三处，发布时一起改：`Cargo.toml`、`gui/Cargo.toml`、`gui/tauri.conf.json`。安装包的版本取自根目录的 `Cargo.toml`。
+版本号写在三处：`Cargo.toml`、`gui/Cargo.toml`、`gui/tauri.conf.json`。用 `scripts\set-version.ps1` 一起改；三处不一致时 `build.ps1` 拒绝打包。
 
 ## 5. 不要破坏的设计
 
@@ -134,6 +142,8 @@ Cargo 工作区，两个包：根目录的 `isobox`（核心库和三个命令�
 - **NSIS 卸载程序会把自己复制到 %TEMP% 再运行**（NSIS 3.13 的进程名是 `Un`），原进程立即退出。测试里要等这个进程结束。
 - **自动点 NSIS 的按钮**：UI 自动化的 InvokePattern 和 `BM_CLICK` 在自定义页上都不可靠（保护设置页点了没反应，离开函数根本没被调用）。界面巡检改为给向导窗口发 `WM_COMMAND`（wParam 是按钮 ID：1 下一步、2 取消、3 上一步）。
 - **调试 NSIS 页面**：`installer\build.ps1 -Preview` 生成的预览版以普通权限运行、不改系统，可以直接在宿主机上点；要看离开函数走到哪一步，临时在脚本里用 `FileWriteUTF16LE` 往 `$TEMP` 写日志。
+- **cargo about 要加 `--workspace`**：不加只统计根目录的 isobox 包（60 多个库），漏掉界面依赖的 Tauri 等 400 多个库。
+- **Windows PowerShell 5.1 的 `Invoke-WebRequest` 显示进度条时下载很慢**，先设 `$ProgressPreference = 'SilentlyContinue'`。
 - **沙盒测试运行时别在宿主机上读 `result.txt`**：读的同时沙盒里的 `Add-Content` 会失败，结果行丢失。等 `done.flag` 出现再看。
 - **`net user` 遇到超过 14 个字符的密码会交互确认**，脚本里用 `NetUserAdd` 或 `New-LocalUser`。
 - **删除正被某个进程当作当前目录的文件夹会失败**（os error 32），迁移时遇到过，现已改为只提示。
@@ -141,22 +151,38 @@ Cargo 工作区，两个包：根目录的 `isobox`（核心库和三个命令�
 - **PowerShell 里 `R` 是 Invoke-History 的别名**，别把辅助函数命名为 R。
 - **Windows 沙盒同时只能开一个**，测试前要关掉其他沙盒。
 
-## 7. 下一步：阶段四（发布）
+## 7. 下一步：阶段四剩下的事
 
-1. **先在真机上走一遍安装包**（见第 2 节“还没在真机上实测的”），尤其是原开发机从 deploy.ps1 版本升级。
-2. **CI**（GitHub Actions）：编译、单元测试、生成安装包并作为构建产物上传。Windows 运行器不支持 Windows 沙盒，但它本身有管理员权限，可以直接在运行器上跑 `IsoBox-setup.exe /S` → 检查 → `uninstall.exe /S`，大部分 `run-in-sandbox.ps1` 的检查可以复用（运行器是一次性的）。运行器上没有 7-Zip 就 `choco install 7zip` 或 `winget`。
-3. **开源许可证**：捆绑的 7-Zip 是 LGPL（7z.dll，unRAR 部分另有限制），安装包里已附 7-Zip 的 License.txt；IsoBox 自己的许可证待定，README 也要更新。
-4. **代码签名**：优先申请 SignPath Foundation（开源项目免费）。要签的是四个 exe、安装包和卸载程序（卸载程序由 makensis 生成，签名需要用 `!uninstfinalize`）。
-5. **说明文档**：能防住什么、防不住什么（安装向导的须知页 `installer/notice.txt` 可以作为底稿）、常见问题。
-6. 找几位朋友在不同电脑上试用：Windows 10、只有一个盘、下载文件夹被移到别的盘、有外接硬盘等情况。
+已经做完的：CI 和发布流程、版本号脚本、第三方许可证声明（随安装包分发，界面“设置”里可以打开）、签名钩子、欢迎页的侧边图、使用说明、SECURITY.md、CHANGELOG.md、试用清单和 Issue 模板。
+
+还要做的，按顺序：
+
+1. **作者决定 IsoBox 的许可证**。之后：加 `LICENSE` 文件；在 `Cargo.toml` 和 `gui/Cargo.toml` 写 `license = "..."`（cargo about 现在会提示 isobox 没有 license 字段）；README 最后一节改掉“尚未确定”；安装包里把 IsoBox 自己的许可证也放进 `licenses\`（`isobox.nsi` 的 `File` 和 `build.ps1` 的准备文件两处）。SignPath Foundation 只接受 OSI 认可许可证的开源项目
+2. **推送分支，看 CI**。最可能出问题的是 `lifecycle` 任务，因为运行器不是沙盒：
+   - 运行器上能否用 diskpart 挂虚拟磁盘 T:（不能的话 T: 相关的检查会被跳过，但“virtual disk T: available”会失败）
+   - 以隔离账户身份启动（CreateProcessWithLogonW）在运行器上是否可用
+   - 运行器有没有桌面会话：没有时界面检查自动跳过（看 result.txt 里的 SKIP）
+   - 测试记录在构建产物 `lifecycle-logs` 里，`commands.txt` 有每条命令的完整输出
+3. **在仓库设置里打开 Private vulnerability reporting**（Settings → Code security），SECURITY.md 和 Issue 模板里的“私下报告”链接才能用
+4. **真机走一遍安装包**（第 2 节的清单），尤其是原开发机从 deploy.ps1 版本升级
+5. **代码签名**：申请 SignPath Foundation（开源项目免费，需要先定许可证、公开仓库）。本地有证书时直接用 `build.ps1 -SignCommand`，会签四个程序、卸载程序和安装程序。SignPath 是在它的服务器上签名，要改成两段：
+   1. 先签四个程序（构建产物交给 SignPath 的 GitHub Action，取回签好的文件）
+   2. 卸载程序：现在由 makensis 在打包时生成，SignPath 签不到。需要给 `isobox.nsi` 加一个只生成卸载程序的模式（`.onInit` 里 `WriteUninstaller` 后退出），先生成、送去签名，再用 `File` 把签好的卸载程序打进安装包，代替 `WriteUninstaller`
+   3. 最后签安装程序
+6. **发布 0.1.0**：CHANGELOG 里的日期改成发布日，提交，打标签 `v0.1.0` 推送，检查发布草稿后点“发布”
+7. **试用**：把 `docs/testing-checklist.md` 发给几位朋友，覆盖 Windows 10、只有一个盘、下载文件夹被移到别的盘、有外接硬盘、装了杀毒软件等情况
 
 ## 8. 常用命令
 
 ```powershell
 # 打包和测试
-powershell -ExecutionPolicy Bypass -File installer\build.ps1 [-NoBuild] [-Preview]
+powershell -ExecutionPolicy Bypass -File installer\build.ps1 [-NoBuild] [-Preview] [-SignCommand 'signtool sign ... "%1"']
 powershell -ExecutionPolicy Bypass -File tests\sandbox\run.ps1             # 端到端测试
 powershell -ExecutionPolicy Bypass -File tests\sandbox\run.ps1 -UiTour     # 截取安装、卸载每一页，存到 target\sandbox-test\logs\shots
+
+# 发布：改版本号、写 CHANGELOG、提交、CI 通过后打标签
+powershell -ExecutionPolicy Bypass -File scripts\set-version.ps1 0.2.0
+git tag v0.2.0; git push origin v0.2.0                                    # release.yml 建发布草稿
 
 # 安装包参数（管理员）
 IsoBox-0.1.0-setup.exe /S [/PROTECT=D:\;E:\ | /PROTECT=none] [/EXCHANGE=<文件夹>] [/NOINIT]

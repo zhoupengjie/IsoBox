@@ -50,10 +50,17 @@ IsoBox 让不信任的桌面软件以独立的本地账户运行，读不到你�
 
 ## 阶段四：发布
 
-- GitHub Actions：自动编译、运行单元测试和沙盒测试
-- 选择开源许可证，申请代码签名（优先 SignPath Foundation）
-- 说明文档：能防住什么、防不住什么
-- 找几位朋友在不同电脑上试用
+- [x] GitHub Actions：clippy、单元测试、生成安装包；在全新的 Windows 运行器上跑完整的安装、使用、卸载测试（还没在 GitHub 上运行过）
+- [x] 发布流程：推送 `v*` 标签生成安装包、SHA-256 和 Release 草稿，说明取自 CHANGELOG.md；`scripts/set-version.ps1` 一次改好三处版本号
+- [x] 第三方许可证声明：cargo about 生成，随安装包分发，界面“设置”里可以打开；安装包附 7-Zip 的许可证
+- [x] 代码签名钩子：`build.ps1 -SignCommand` 签四个程序、卸载程序和安装程序
+- [x] 说明文档：使用说明、SECURITY.md（能防住什么、防不住什么、怎么报告漏洞）、CHANGELOG.md
+- [x] 试用清单和 Issue 模板；安装向导的欢迎页换成 IsoBox 自己的侧边图
+- [ ] 选择开源许可证（作者决定）
+- [ ] 推送后确认 CI 通过
+- [ ] 申请代码签名（优先 SignPath Foundation），接入发布流程
+- [ ] 真机验证安装包，发布 0.1.0
+- [ ] 找几位朋友在不同电脑上试用
 
 ## 已知的安全边界
 

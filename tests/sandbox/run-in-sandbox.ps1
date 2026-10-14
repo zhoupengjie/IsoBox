@@ -1,12 +1,21 @@
-# Runs inside Windows Sandbox (LogonCommand) as the built-in admin user.
-# Exercises the whole IsoBox lifecycle and writes PASS/FAIL lines to C:\Logs\result.txt.
+# Exercises the whole IsoBox lifecycle and writes PASS/FAIL lines to <Logs>\result.txt.
+# Runs as an administrator on a throwaway Windows: inside Windows Sandbox (LogonCommand, see run.ps1)
+# or on a CI runner (.github\workflows\ci.yml). It creates an account, changes permissions on C:\ and
+# on a virtual disk T:, so never run it on a real machine.
+#   -Stage  folder with IsoBox-setup.exe and test\probe-setup.exe (made by run.ps1)
+#   -Logs   where result.txt, commands.txt and done.flag are written
 # Keep this file ASCII: Windows PowerShell 5.1 reads BOM-less files with the ANSI code page.
 
+param(
+    [string]$Stage = 'C:\Stage',
+    [string]$Logs = 'C:\Logs'
+)
 $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $env:ISOBOX_NONINTERACTIVE = '1'
 
-$log = 'C:\Logs'
+New-Item -ItemType Directory -Force $Logs | Out-Null
+$log = $Logs
 $res = "$log\result.txt"
 $cmdlog = "$log\commands.txt"
 $IB = 'C:\Program Files\IsoBox'
@@ -36,7 +45,7 @@ $uninstKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\IsoBox'
 $smLnk = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\IsoBox\IsoBox.lnk"
 # The installer shows its log only in its own window; in silent mode only the exit code is visible
 function RunInstaller([string[]]$a) {
-    $p = Start-Process 'C:\Stage\IsoBox-setup.exe' -ArgumentList $a -Wait -PassThru
+    $p = Start-Process "$Stage\IsoBox-setup.exe" -ArgumentList $a -Wait -PassThru
     Add-Content -Encoding utf8 $cmdlog ("`r`n>>> IsoBox-setup.exe " + ($a -join ' ') + "`r`nexit=" + $p.ExitCode)
     return $p.ExitCode
 }
@@ -69,6 +78,7 @@ try {
     Check 'installer: program files' ((Test-Path $setup) -and (Test-Path $cli) -and (Test-Path "$IB\isobox-launch.exe") -and (Test-Path "$IB\isobox-gui.exe"))
     Check 'installer: bundled 7-Zip' ((Test-Path "$IB\7-Zip\7z.exe") -and (Test-Path "$IB\7-Zip\7z.dll") -and (Test-Path "$IB\7-Zip\License.txt"))
     Check 'installer: config and uninstaller' ((Test-Path "$IB\isobox.toml") -and (Test-Path "$IB\uninstall.exe"))
+    Check 'installer: third-party license notices' ((Get-Item "$IB\licenses\THIRD-PARTY-NOTICES.txt" -ErrorAction SilentlyContinue).Length -gt 10000)
     Check 'installer: install dir read-only for Users' ((Acl $IB) -match 'BUILTIN\\Users:\(OI\)\(CI\)\(RX\)')
     Check 'installer: install dir does not inherit' (-not ((Acl $IB) -match '\(I\)')) (Acl $IB)
     $un = Get-ItemProperty $uninstKey -ErrorAction SilentlyContinue
@@ -103,7 +113,7 @@ try {
     Check 'exchange dir must not be the user profile' ((Run $setup @('set-exchange', $env:USERPROFILE)) -ne 0)
 
     Section 'add (quick install = unpack)'
-    Check 'add exits 0' ((Run $setup @('add', 'probe', 'C:\Stage\test\probe-setup.exe', '--display', 'Probe')) -eq 0)
+    Check 'add exits 0' ((Run $setup @('add', 'probe', "$Stage\test\probe-setup.exe", '--display', 'Probe')) -eq 0)
     Check 'program unpacked into C library' (Test-Path "$IB\apps\probe\IsoProbe.exe")
     Check 'helper exe ranked below main program' ((Get-Content "$IB\isobox.toml" -Raw -Encoding UTF8) -match "exe = `"IsoProbe.exe`"")
     Check 'config records library C' ((Get-Content "$IB\isobox.toml" -Raw -Encoding UTF8) -match '(?s)\[apps\.probe\].*library = "C"')
@@ -226,13 +236,18 @@ try {
         Check 'status lists apps' (@($st.apps).Count -ge 2) "$(@($st.apps).Count)"
         Check 'status lists C library' (@($st.libraries | Where-Object { $_.drive -eq 'C' }).Count -eq 1)
     }
-    $gui = Start-Process "$IB\isobox-gui.exe" -PassThru
-    $title = ''
-    for ($i = 0; $i -lt 30 -and -not $title; $i++) { Start-Sleep -Milliseconds 500; $gui.Refresh(); $title = $gui.MainWindowTitle }
-    Check 'GUI window opens' ($title -eq 'IsoBox') "title='$title' exited=$($gui.HasExited)"
-    Start-Sleep -Seconds 2
-    Check 'GUI keeps running' (-not $gui.HasExited)
-    Stop-Process -Id $gui.Id -Force -ErrorAction SilentlyContinue
+    # Windows only show a window in a session with a desktop; a CI runner started as a service has none
+    if ((Get-Process -Id $PID).SessionId -ne 0) {
+        $gui = Start-Process "$IB\isobox-gui.exe" -PassThru
+        $title = ''
+        for ($i = 0; $i -lt 30 -and -not $title; $i++) { Start-Sleep -Milliseconds 500; $gui.Refresh(); $title = $gui.MainWindowTitle }
+        Check 'GUI window opens' ($title -eq 'IsoBox') "title='$title' exited=$($gui.HasExited)"
+        Start-Sleep -Seconds 2
+        Check 'GUI keeps running' (-not $gui.HasExited)
+        Stop-Process -Id $gui.Id -Force -ErrorAction SilentlyContinue
+    } else {
+        Log 'SKIP  GUI window (no desktop in session 0)'
+    }
 
     Section 'remove-app'
     Check 'remove-app exits 0' ((Run $setup @('remove-app', 'probe')) -eq 0)

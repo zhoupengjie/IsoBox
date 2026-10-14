@@ -1,0 +1,104 @@
+# 编译、单元测试、生成安装包；再在一台全新的 Windows 运行器上完整走一遍：
+# 运行安装包 → 添加软件、隔离探测、库、迁移、还原 → 更新安装 → 运行卸载程序。
+#
+# GitHub 的 Windows 运行器不支持 Windows 沙盒，但它本身是一次性的、有管理员权限，
+# 所以直接在上面运行沙盒测试用的 tests\sandbox\run-in-sandbox.ps1。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: 编译、单元测试、安装包
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: clippy
+        run: cargo clippy --workspace --release --all-targets -- -D warnings
+
+      - name: 单元测试
+        run: cargo test --workspace
+
+      - name: 安装 cargo-about（生成第三方许可证声明）
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9
+
+      - name: 确保有 7-Zip（捆绑进安装包，也用来做测试包）
+        shell: powershell
+        run: |
+          if (-not (Test-Path 'C:\Program Files\7-Zip\7z.exe')) { choco install 7zip -y --no-progress }
+
+      - name: 生成安装包和测试包
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests\sandbox\run.ps1 -StageOnly
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: |
+            target/installer/IsoBox-*-setup.exe
+            target/installer/IsoBox-*-setup.exe.sha256
+          if-no-files-found: error
+
+      - name: 上传测试包
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-stage
+          path: target/sandbox-test/stage
+          if-no-files-found: error
+
+  lifecycle:
+    name: 安装、使用、卸载
+    needs: build
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: test-stage
+          path: stage
+
+      # 测试要确认用的是安装包捆绑的 7-Zip，运行器上自带的先挪开
+      - name: 挪开系统里的 7-Zip
+        shell: powershell
+        run: |
+          if (Test-Path 'C:\Program Files\7-Zip') { Rename-Item 'C:\Program Files\7-Zip' '7-Zip.off' }
+
+      - name: 运行测试
+        shell: powershell
+        run: |
+          $logs = Join-Path $env:RUNNER_TEMP 'isobox-logs'
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests\sandbox\run-in-sandbox.ps1 -Stage "$env:GITHUB_WORKSPACE\stage" -Logs $logs
+          Get-Content "$logs\result.txt" -Encoding UTF8
+          $s = Select-String -Path "$logs\result.txt" -Pattern 'SUMMARY passed=(\d+) failed=(\d+)'
+          if (-not $s -or [int]$s.Matches[0].Groups[2].Value -ne 0) { exit 1 }
+
+      - name: 上传测试记录
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lifecycle-logs
+          path: ${{ runner.temp }}/isobox-logs
