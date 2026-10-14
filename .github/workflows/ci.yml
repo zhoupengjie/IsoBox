@@ -44,12 +44,12 @@ jobs:
           tool: cargo-about@0.9
 
       - name: 确保有 7-Zip（捆绑进安装包，也用来做测试包）
-        shell: powershell
+        shell: pwsh
         run: |
           if (-not (Test-Path 'C:\Program Files\7-Zip\7z.exe')) { choco install 7zip -y --no-progress }
 
       - name: 生成安装包和测试包
-        shell: powershell
+        shell: pwsh
         run: |
           [Console]::OutputEncoding = [Text.Encoding]::UTF8   # 运行器是英文系统，不设的话中文标题会变成问号
           powershell -NoProfile -ExecutionPolicy Bypass -File tests\sandbox\run.ps1 -StageOnly
@@ -88,12 +88,12 @@ jobs:
 
       # 测试要确认用的是安装包捆绑的 7-Zip，运行器上自带的先挪开
       - name: 挪开系统里的 7-Zip
-        shell: powershell
+        shell: pwsh
         run: |
           if (Test-Path 'C:\Program Files\7-Zip') { Rename-Item 'C:\Program Files\7-Zip' '7-Zip.off' }
 
       - name: 运行测试
-        shell: powershell
+        shell: pwsh
         run: |
           [Console]::OutputEncoding = [Text.Encoding]::UTF8
           $logs = Join-Path $env:RUNNER_TEMP 'isobox-logs'

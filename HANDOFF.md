@@ -144,6 +144,7 @@ Cargo 工作区，两个包：根目录的 `isobox`（核心库和三个命令�
 - **NSIS 卸载程序会把自己复制到 %TEMP% 再运行**（NSIS 3.13 的进程名是 `Un`），原进程立即退出。测试里要等这个进程结束。
 - **自动点 NSIS 的按钮**：UI 自动化的 InvokePattern 和 `BM_CLICK` 在自定义页上都不可靠（保护设置页点了没反应，离开函数根本没被调用）。界面巡检改为给向导窗口发 `WM_COMMAND`（wParam 是按钮 ID：1 下一步、2 取消、3 上一步）。
 - **调试 NSIS 页面**：`installer\build.ps1 -Preview` 生成的预览版以普通权限运行、不改系统，可以直接在宿主机上点；要看离开函数走到哪一步，临时在脚本里用 `FileWriteUTF16LE` 往 `$TEMP` 写日志。
+- **GitHub Actions 里不要用 `shell: powershell`**：运行器把 `run:` 里的脚本存成无 BOM 的 UTF-8，Windows PowerShell 5.1 按英文系统的 ANSI 代码页读，中文变乱码，某些字节还会被读成弯引号，整个步骤语法错误、一行都不执行。工作流里一律用 `shell: pwsh`（PowerShell 7），再设 `[Console]::OutputEncoding = UTF8`，否则输出的中文变问号。步骤里再用 `powershell -File` 调项目里的脚本没问题（它们有 BOM 或是纯 ASCII）。
 - **cargo about 要加 `--workspace`**：不加只统计根目录的 isobox 包（60 多个库），漏掉界面依赖的 Tauri 等 400 多个库。
 - **Windows PowerShell 5.1 的 `Invoke-WebRequest` 显示进度条时下载很慢**，先设 `$ProgressPreference = 'SilentlyContinue'`。
 - **沙盒测试运行时别在宿主机上读 `result.txt`**：读的同时沙盒里的 `Add-Content` 会失败，结果行丢失。等 `done.flag` 出现再看。
