@@ -111,6 +111,10 @@ try {
     Check 'still protected after re-run' ((Acl 'C:\TestData') -match 'isobox:\(OI\)\(CI\)\(N\)')
     Check 'exchange dir must not be a drive root' ((Run $setup @('set-exchange', 'C:\')) -ne 0)
     Check 'exchange dir must not be the user profile' ((Run $setup @('set-exchange', $env:USERPROFILE)) -ne 0)
+    Check 'exchange dir must not be inside Windows' ((Run $setup @('set-exchange', 'C:\Windows\Temp\IsoBoxX')) -ne 0)
+    Check 'exchange dir must not be inside AppData' ((Run $setup @('set-exchange', "$env:LOCALAPPDATA\IsoBoxX")) -ne 0)
+    Check 'exchange dir with .. is resolved first' ((Run $setup @('set-exchange', 'C:\TestData\..')) -ne 0)
+    Check 'install choices cannot change once the account exists' ((Run $setup @('install', '--apply', '--exchange', 'C:\Exchange3')) -ne 0)
 
     Section 'add (quick install = unpack)'
     Check 'add exits 0' ((Run $setup @('add', 'probe', "$Stage\test\probe-setup.exe", '--display', 'Probe')) -eq 0)
@@ -135,6 +139,19 @@ try {
     Check 'update keeps the app in the library' (Test-Path "$IB\apps\probe\IsoProbe.exe")
     Check 'update keeps apps dir permissions' ((Acl "$IB\apps") -match 'isobox:\(OI\)\(CI\)\(M\)')
     Check 'update keeps protection, no new backup' (((Acl 'C:\TestData') -match 'isobox:\(OI\)\(CI\)\(N\)') -and (@(Get-ChildItem "$IB\backup" -Directory).Count -eq $nb))
+
+    Section 'installer repairs a half-done install'
+    # Pretend the first install stopped before granting the exchange folder (its last step)
+    icacls $x /remove:g "*$sid" /q | Out-Null
+    $info = (& $setup installer-info 2>&1 | Out-String)
+    Check 'installer-info reports partial' ($info -match 'account=partial') $info
+    $st = $null
+    try { $st = (& $cli status --json) -join "`n" | ConvertFrom-Json } catch { }
+    Check 'status shows what is missing' ($st -and $st.account.gap) "$($st.account.gap)"
+    $code = RunInstaller @('/S')
+    Check 'installer repair exits 0' ($code -eq 0) "exit=$code"
+    Check 'exchange dir granted again' ((Acl $x) -match 'isobox:\(OI\)\(CI\)\(M\)')
+    Check 'installer-info reports ready after repair' ((& $setup installer-info 2>&1 | Out-String) -match 'account=ready')
 
     Section 'isolation probe (running as isobox)'
     Remove-Item "$x\probe-result.txt" -ErrorAction SilentlyContinue
@@ -255,11 +272,26 @@ try {
     Check 'shortcut removed' (-not (Test-Path $lnk))
     Check 'config entry removed' (-not ((Get-Content "$IB\isobox.toml" -Raw -Encoding UTF8) -match '\[apps\.probe\]'))
 
+    Section 'uninstaller refuses when isobox-setup.exe is gone'
+    # e.g. quarantined by an antivirus: without it nothing can be undone, so the uninstall must stop.
+    # _?= runs the uninstaller in place, so its exit code is visible
+    Rename-Item $setup 'isobox-setup.exe.off'
+    $p = Start-Process "$IB\uninstall.exe" -ArgumentList '/S', "_?=$IB" -Wait -PassThru
+    Check 'uninstall stops with exit code 3' ($p.ExitCode -eq 3) "exit=$($p.ExitCode)"
+    Check 'IsoBox and the account are still there' ((Test-Path "$IB\isobox-setup.exe.off") -and (Test-Path "$IB\backup") -and [bool](Get-LocalUser isobox -ErrorAction SilentlyContinue))
+    Rename-Item "$IB\isobox-setup.exe.off" 'isobox-setup.exe'
+
     Section 'uninstall (system uninstaller, keeping the account files)'
     # Stand-in for a chat history inside the isolated account's Documents
     $chat = 'C:\Users\isobox\Documents\xwechat_files\wxid_test'
     New-Item -ItemType Directory -Force $chat | Out-Null
     Set-Content "$chat\msg.db" 'chat'
+    # With the exchange folder on another drive the files have to be copied, not renamed
+    $keepTo = $x
+    if ($hasT) {
+        Check 'move the exchange folder to T:' ((Run $setup @('set-exchange', 'T:\Exchange')) -eq 0)
+        $keepTo = 'T:\Exchange'
+    }
     Start-Process "$IB\uninstall.exe" -ArgumentList '/S' -Wait | Out-Null
     # The uninstaller copies itself to %TEMP% and runs from there, so wait for that copy as well
     $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -270,16 +302,21 @@ try {
     Check 'install dir removed (library, backups, program files)' (-not (Test-Path $IB)) ((Get-ChildItem $IB -Recurse -Force -ErrorAction SilentlyContinue | Select-Object -First 8 -ExpandProperty FullName) -join ', ')
     Check 'Apps entry removed' (-not (Test-Path $uninstKey))
     Check 'start menu shortcut removed' (-not (Test-Path $smLnk))
-    $kept = Get-ChildItem $x -Recurse -Filter msg.db -ErrorAction SilentlyContinue | Select-Object -First 1
+    $kept = Get-ChildItem $keepTo -Recurse -Filter msg.db -ErrorAction SilentlyContinue | Select-Object -First 1
     Check 'chat history kept in the exchange folder' ($kept -and ((Get-Content $kept.FullName) -eq 'chat')) "$($kept.FullName)"
     if ($kept) {
-        Check 'kept files have no rule for the deleted account' (-not ((Acl $kept.FullName) -match [regex]::Escape($sid))) (Acl $kept.FullName)
-        Check 'kept files inherit the exchange folder permissions' ((Acl $kept.FullName) -match [regex]::Escape("$($env:USERNAME):(I)(F)")) (Acl $kept.FullName)
+        $ka = Acl $kept.FullName
+        Check 'kept files have no rule for the deleted account' (-not ($ka -match [regex]::Escape($sid))) $ka
+        # Every rule inherited from the exchange folder: icacls marks those with (I)
+        $own = @($ka -split "`r?`n" | Where-Object { $_ -match ':\(' -and $_ -notmatch '\(I\)' })
+        Check 'kept files only carry inherited permissions' ($own.Count -eq 0) $ka
         Check 'kept files owned by the user' ((Get-Acl $kept.FullName).Owner -like "*\$env:USERNAME") (Get-Acl $kept.FullName).Owner
+        $links = @(Get-ChildItem $keepTo -Recurse -Force -Attributes ReparsePoint -ErrorAction SilentlyContinue)
+        Check 'no links (My Music etc.) copied along' ($links.Count -eq 0) (($links.FullName) -join ', ')
     }
     Check 'no rule left on C:\TestData' (-not ((Acl 'C:\TestData') -match [regex]::Escape($sid)))
     if ($hasT) { Check 'no rule left on T:\' (-not (((Acl 'T:\') -match [regex]::Escape($sid)) -or (HasDeny 'T:\'))) (Acl 'T:\') }
-    Check 'no rule left on exchange dir' (-not ((Acl $x) -match [regex]::Escape($sid)))
+    Check 'no rule left on either exchange dir' (-not ((Acl $x) -match [regex]::Escape($sid)) -and -not ((Acl $keepTo) -match [regex]::Escape($sid)))
     Check 'ProgramData leftover removed' (-not (Test-Path 'C:\ProgramData\IsoProbeLeftover'))
     Check 'credential removed' (-not ((cmdkey /list | Out-String) -match 'isobox:isobox'))
     Check 'login-screen setting removed' (-not (RegHas $hideKey 'isobox'))

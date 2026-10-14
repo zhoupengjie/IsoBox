@@ -129,6 +129,11 @@ function statusBanner() {
     return `<div class="banner warn">${icon('warn')}<span>还没有隔离账户。安装后才能添加和运行隔离软件。</span>
       <span class="spacer"></span><button class="btn" data-action="install">立即安装</button></div>`;
   }
+  // 账户建了，但安装中途失败：补上没做完的步骤（install 可以重复运行）
+  if (ov.account.gap) {
+    return `<div class="banner warn">${icon('warn')}<span>隔离账户没有完全建好：${esc(ov.account.gap)}。</span>
+      <span class="spacer"></span><button class="btn" data-action="repair">修复</button></div>`;
+  }
   const prot = ov.protected.filter((p) => p.active).map((p) => p.path);
   return `<div class="banner ok">${icon('ok')}<span>隔离账户正常 · ${prot.length ? '已保护 ' + esc(prot.join('、')) : '没有受保护的盘'}
     · ${ov.theme_watcher ? '深浅色同步中' : '深浅色同步将在启动软件后运行'}</span></div>`;
@@ -394,6 +399,7 @@ const actions = {
   refresh: () => refresh(),
   'close-dialog': () => closeDialog(),
   install: () => runAdmin('安装隔离账户', ['install', '--apply']),
+  repair: () => runAdmin('修复隔离账户', ['install', '--apply']),
   'add-start': () => startAdd(),
   'add-pick': () => addPick(),
   'add-run': () => addRun(),

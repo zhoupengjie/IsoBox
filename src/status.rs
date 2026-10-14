@@ -34,6 +34,25 @@ pub struct Account {
     pub exists: bool,
     pub sid: Option<String>,
     pub profile: Option<String>,
+    /// 账户已存在，但安装没做完时缺的那一步。界面据此显示“修复”
+    pub gap: Option<String>,
+}
+
+/// 隔离账户已存在时，install 的各步是否都做完了，返回缺的第一项。
+/// install 遇错即停，交换文件夹是最后两步，所以前面任何一步失败都会表现为交换文件夹没建好。
+/// 受保护的位置不在检查之列：自动保护时新接上的硬盘不算“没装完”
+pub fn install_gap(cfg: &Config, sid: &str) -> Option<String> {
+    if account::profile_path(sid).ok().flatten().is_none() {
+        return Some("隔离账户还没有个人文件夹".into());
+    }
+    if library::get(drives::system_drive(), sid).is_none() {
+        return Some("系统盘的库还没建好".into());
+    }
+    match cfg.exchange_dir() {
+        Ok(x) if x.exists() && acl::has_explicit_allow(&x, sid) => None,
+        Ok(x) => Some(format!("交换文件夹 {} 还没建好", x.display())),
+        Err(e) => Some(format!("{e:#}")),
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -203,6 +222,7 @@ pub fn overview(cfg_path: &Path, cfg: &Config, with_icons: bool) -> Overview {
         account: Account {
             user: cfg.sandbox_user.clone(),
             exists: sid.is_some(),
+            gap: sid.as_deref().and_then(|s| install_gap(cfg, s)),
             sid,
             profile: profile.map(|p| p.display().to_string()),
         },

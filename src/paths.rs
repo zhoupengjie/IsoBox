@@ -69,6 +69,46 @@ pub fn startup_dir() -> Result<PathBuf> {
     known_folder(&windows::Win32::UI::Shell::FOLDERID_Startup, "开机启动文件夹")
 }
 
+/// 当前用户的桌面、文档、下载、图片、音乐、视频文件夹（可能被移到了别的盘）
+pub fn personal_folders() -> Vec<PathBuf> {
+    use windows::Win32::UI::Shell::{
+        FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Videos,
+    };
+    [
+        (&FOLDERID_Desktop, "桌面"),
+        (&FOLDERID_Documents, "文档"),
+        (&FOLDERID_Downloads, "下载文件夹"),
+        (&FOLDERID_Pictures, "图片"),
+        (&FOLDERID_Music, "音乐"),
+        (&FOLDERID_Videos, "视频"),
+    ]
+    .into_iter()
+    .filter_map(|(id, what)| known_folder(id, what).ok())
+    .collect()
+}
+
+/// 整理路径的写法：去掉 . 和 ..，统一成反斜杠，去掉末尾多余的反斜杠。只看文字，不访问磁盘
+pub fn normalize(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    let mut parts = Vec::new();
+    for c in p.components() {
+        match c {
+            Component::Prefix(pre) => out.push(pre.as_os_str()),
+            Component::RootDir => out.push("\\"),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                parts.pop();
+            }
+            Component::Normal(s) => parts.push(s),
+        }
+    }
+    for s in parts {
+        out.push(s);
+    }
+    out
+}
+
 /// 默认的交换文件夹：下载文件夹里的 IsoBox
 pub fn default_exchange_dir() -> Result<PathBuf> {
     Ok(downloads_dir()?.join("IsoBox"))
@@ -80,4 +120,18 @@ pub fn drive_letter(p: &Path) -> Option<char> {
     let mut c = s.chars();
     let l = c.next()?;
     (l.is_ascii_alphabetic() && c.next() == Some(':')).then(|| l.to_ascii_uppercase())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_resolves_dots_and_trailing_separators() {
+        assert_eq!(normalize(Path::new(r"D:\a\..\..")), PathBuf::from(r"D:\"));
+        assert_eq!(normalize(Path::new(r"D:\Swap\\")), PathBuf::from(r"D:\Swap"));
+        assert_eq!(normalize(Path::new("D:/x/./y")), PathBuf::from(r"D:\x\y"));
+        assert_eq!(normalize(Path::new(r"C:\Users\me\..\other")), PathBuf::from(r"C:\Users\other"));
+        assert!(!normalize(Path::new(r"x\y")).is_absolute());
+    }
 }

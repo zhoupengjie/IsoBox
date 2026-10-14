@@ -142,11 +142,20 @@ pub fn has_explicit_deny(path: &Path, sid: &str) -> bool {
 
 /// 权限文本里是否有一条针对 sid 的显式禁止规则。带 ID 标志的是继承来的，不算
 pub fn sddl_has_explicit_deny(sddl: &str, sid: &str) -> bool {
+    sddl_has_explicit(sddl, "D", sid)
+}
+
+/// 位置上有没有一条针对 sid 的显式允许规则，例如交换文件夹的授权
+pub fn has_explicit_allow(path: &Path, sid: &str) -> bool {
+    get_sddl(path).is_ok_and(|s| sddl_has_explicit(&s, "A", sid))
+}
+
+fn sddl_has_explicit(sddl: &str, kind: &str, sid: &str) -> bool {
     sddl.split('(').skip(1).any(|ace| {
         let ace = ace.trim_end_matches(')');
         let parts: Vec<&str> = ace.split(';').collect();
         parts.len() >= 6
-            && parts[0] == "D"
+            && parts[0] == kind
             && !parts[1].contains("ID")
             && parts[5].eq_ignore_ascii_case(sid)
     })
@@ -228,5 +237,7 @@ mod tests {
     fn allow_is_not_deny() {
         let x = "D:AI(A;OICI;0x1301bf;;;S-1-5-21-1111111111-2222222222-3333333333-1005)";
         assert!(!sddl_has_explicit_deny(x, SID));
+        assert!(sddl_has_explicit(x, "A", SID));
+        assert!(!sddl_has_explicit("D:AI(A;OICIID;0x1301bf;;;S-1-5-21-1111111111-2222222222-3333333333-1005)", "A", SID));
     }
 }

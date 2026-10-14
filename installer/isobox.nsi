@@ -136,13 +136,21 @@ VIAddVersionKey /LANG=${LANG_SIMPCHINESE} "LegalCopyright" "IsoBox"
   ${Loop}
 !macroend
 
-; 给命令行参数加引号。末尾是反斜杠时（例如 D:\）要再加一个，否则 \" 会被当成转义的引号
+; 给路径参数加引号。末尾的反斜杠先全部去掉（盘根 D: 再补回一个），剩下的一个要写成两个，
+; 否则 \" 会被当成转义的引号，参数就连上了后面的内容
 Function QuoteArg
   Exch $0
   Push $1
-  StrCpy $1 $0 1 -1
-  ${If} $1 == "\"
-    StrCpy $0 "$0\"
+  ${Do}
+    StrCpy $1 $0 1 -1
+    ${If} $1 != "\"
+      ${ExitDo}
+    ${EndIf}
+    StrCpy $0 $0 -1
+  ${Loop}
+  StrLen $1 $0
+  ${If} $1 == 2
+    StrCpy $0 "$0\\"
   ${EndIf}
   StrCpy $0 '"$0"'
   Pop $1
@@ -186,6 +194,8 @@ Function .onInit
       StrCpy $WelcomeText "将把 IsoBox 更新到 ${VERSION}。$\r$\n$\r$\n你的软件、库、受保护的盘和设置都会保留，正在运行的隔离软件不受影响。IsoBox 的界面和托盘会先关闭。$\r$\n$\r$\n点“下一步”开始更新。"
     ${Case} "foreign"
       StrCpy $WelcomeText "将安装 IsoBox ${VERSION}。$\r$\n$\r$\n注意：系统里已经有名为 $SandboxUser 的账户，但它不是 IsoBox 创建的。安装程序只装程序文件，不会动这个账户。装好后请在配置文件 isobox.toml 里把 sandbox_user 改成别的名字，再打开 IsoBox 点“立即安装”。"
+    ${Case} "partial"
+      StrCpy $WelcomeText "上次安装没有完成：隔离账户 $SandboxUser 已经建了，但还有几步没做完。$\r$\n$\r$\n这次会把 IsoBox 更新到 ${VERSION}，并补上没做完的步骤，用的是上次的选择。$\r$\n$\r$\n点“下一步”继续。"
     ${Case} "nocred"
       StrCpy $WelcomeText "将安装 IsoBox ${VERSION} 的程序文件。$\r$\n$\r$\n注意：隔离账户 $SandboxUser 已经存在，但它的密码不在当前账户的凭据管理器里，可能是用另一个 Windows 账户安装的。安装程序只更新程序文件，请用当初安装 IsoBox 的账户使用它。"
     ${CaseElse}
@@ -663,8 +673,15 @@ Function InitAccount
     Return
   ${EndIf}
   DetailPrint ""
-  DetailPrint "创建隔离账户、建库、保护选中的盘。备份硬盘的权限可能需要几分钟，请稍候……"
-  nsExec::ExecToLog '"$INSTDIR\isobox-setup.exe" --utf16 --non-interactive install --apply $ProtectArgs $ExchangeArg'
+  ${If} $AccountState == "partial"
+    ; install 可以重复运行：做过的步骤跳过。上次的选择已经写进了配置，这次不再传
+    DetailPrint "补上次没做完的步骤。备份硬盘的权限可能需要几分钟，请稍候……"
+    StrCpy $1 ""
+  ${Else}
+    DetailPrint "创建隔离账户、建库、保护选中的盘。备份硬盘的权限可能需要几分钟，请稍候……"
+    StrCpy $1 "$ProtectArgs $ExchangeArg"
+  ${EndIf}
+  nsExec::ExecToLog '"$INSTDIR\isobox-setup.exe" --utf16 --non-interactive install --apply $1'
   Pop $0
   ${If} $0 == 0
     StrCpy $FinishText "IsoBox 已经装好，隔离账户也已建好。$\r$\n$\r$\n打开 IsoBox，点“添加软件”，选择微信、QQ 等软件的安装包，就能把它们装进隔离账户。"
@@ -802,13 +819,17 @@ Section "Uninstall"
     DetailPrint "撤销 IsoBox 对系统的修改……"
     nsExec::ExecToLog '"$INSTDIR\isobox-setup.exe" --utf16 --non-interactive uninstall --apply $0'
     Pop $1
-    ${If} $1 != 0
-      MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "有些清理步骤没有完成，原因见窗口里的记录。$\r$\n$\r$\n选“否”：保留 IsoBox，处理后可以再次卸载（推荐）。$\r$\n选“是”：仍然删除 IsoBox 的程序文件。" /SD IDNO IDYES force
-      SetErrorLevel 3
-      Abort "卸载没有完成，IsoBox 保留在 $INSTDIR"
-      force:
-      StrCpy $Forced 1
-    ${EndIf}
+  ${Else}
+    ; 例如被杀毒软件隔离了。没有它就撤销不了禁止规则、删不了隔离账户，不能当作卸载成功
+    DetailPrint "找不到 $INSTDIR\isobox-setup.exe，没法撤销 IsoBox 对系统的修改。重新运行 IsoBox 安装程序可以把它装回来"
+    StrCpy $1 "missing"
+  ${EndIf}
+  ${If} $1 != 0
+    MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "有些清理步骤没有完成，原因见窗口里的记录。$\r$\n$\r$\n选“否”：保留 IsoBox，处理后可以再次卸载（推荐）。$\r$\n选“是”：仍然删除 IsoBox 的程序文件。" /SD IDNO IDYES force
+    SetErrorLevel 3
+    Abort "卸载没有完成，IsoBox 保留在 $INSTDIR"
+    force:
+    StrCpy $Forced 1
   ${EndIf}
 
   ; 只删安装程序放进来的文件。系统盘的库也在这个目录里，上一步已经清理过

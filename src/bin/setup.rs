@@ -325,6 +325,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::SetExchange { path } => {
             admin()?;
+            let path = paths::normalize(&path);
             check_exchange_dir(&path)?;
             set_exchange(&cfg_path, &cfg, &path)
         }
@@ -348,11 +349,19 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Install { protect, no_protect, exchange } => {
             check_same_user()?;
             let mut cfg = cfg;
+            let choose_protect = no_protect || !protect.is_empty();
+            // 账户建好以后再改这些，旧位置上的授权和禁止规则就没人管了。这时改用专门的命令，它们会先撤销旧的
+            if (choose_protect || exchange.is_some()) && lookup_sid(&cfg.sandbox_user).is_ok() {
+                bail!(
+                    "隔离账户已经建好，安装时的选择不能再改。\n\
+                     更换交换文件夹用 isobox-setup set-exchange，增删受保护的位置用 isobox-setup protect add/remove，\n\
+                     也可以在 IsoBox 界面的“设置”和“保护状态”里操作"
+                );
+            }
             if let Some(x) = &exchange {
                 check_exchange_dir(x)?;
-                cfg.exchange_dir_raw = Some(x.clone());
+                cfg.exchange_dir_raw = Some(paths::normalize(x));
             }
-            let choose_protect = no_protect || !protect.is_empty();
             if choose_protect {
                 cfg.deny_paths = protect;
                 cfg.protect_auto_raw = Some(false);
@@ -365,7 +374,7 @@ fn run(cli: Cli) -> Result<()> {
                     save_protect_list(&cfg_path, &cfg.deny_paths)?;
                 }
                 if let Some(x) = &exchange {
-                    isobox::config::set_top_level(&cfg_path, "exchange_dir", toml::Value::from(x.display().to_string()))?;
+                    isobox::config::set_top_level(&cfg_path, "exchange_dir", toml::Value::from(paths::normalize(x).display().to_string()))?;
                 }
             }
             confirm_and_run(&steps, &cfg, cli.apply, true)?;
@@ -626,17 +635,31 @@ fn install_plan(cfg: &Config) -> Result<Vec<Step>> {
 /// 反过来做的话，权限规则会变成指向不存在账户的“未知 SID”。
 fn uninstall_plan(cfg: &Config, sid_arg: Option<String>, keep_data: bool) -> Result<Vec<Step>> {
     let user = &cfg.sandbox_user;
+    // 同名但不是 IsoBox 建的账户：不碰它，只清理 IsoBox 自己的快捷方式等
+    let mut foreign = false;
     let sid = match lookup_sid(user) {
         Ok(s) => {
             // 账户存在时，必须带有 isobox 写入的备注，否则拒绝动它
             let comment = user_comment(user)?;
             if comment != MARKER {
-                bail!(
-                    "账户 {user} 的备注是“{comment}”，不是 isobox 创建的，拒绝卸载。\n\
-                     如果确认要清理，请先手动把它的备注改成“{MARKER}”"
-                );
+                // 库或盘上的禁止规则用着它的 SID，多半是 IsoBox 建的账户被改了备注，不能当作没装过
+                let traces = !library::discover(&s).is_empty()
+                    || drives::list()
+                        .into_iter()
+                        .filter(|d| d.ready && d.acl)
+                        .any(|d| acl::has_explicit_deny(Path::new(&d.root()), &s));
+                if traces {
+                    bail!(
+                        "账户 {user} 的备注是“{comment}”，不是 isobox 创建的，但 IsoBox 的库或禁止规则在用它，拒绝卸载。\n\
+                         如果确认它就是 IsoBox 的隔离账户，请先手动把它的备注改成“{MARKER}”"
+                    );
+                }
+                eprintln!("注意：系统里的账户 {user} 不是 IsoBox 创建的（备注是“{comment}”），不会动它");
+                foreign = true;
+                None
+            } else {
+                Some(s)
             }
-            Some(s)
         }
         Err(_) => sid_arg,
     };
@@ -653,9 +676,11 @@ fn uninstall_plan(cfg: &Config, sid_arg: Option<String>, keep_data: bool) -> Res
         Some(sid) => {
             steps.push(Step::KillProcesses);
             steps.push(Step::RemoveTasks);
-            // 禁止规则：配置里写的位置，加上所有盘的根目录，凡是带这个 SID 的都撤销
+            // 禁止规则：配置里写的位置、所有盘的根目录，以及每个权限备份记下的位置（加保护前都会备份，
+            // 配置被改坏或条目被手工删掉时靠它找到），凡是带这个 SID 的都撤销
             let mut candidates: Vec<PathBuf> = cfg.deny_paths.clone();
             candidates.extend(drives::list().into_iter().filter(|d| d.ready && d.acl).map(|d| PathBuf::from(d.root())));
+            candidates.extend(backup_targets());
             let mut seen = Vec::<String>::new();
             for p in candidates {
                 let key = p.to_string_lossy().trim_end_matches('\\').to_lowercase();
@@ -684,6 +709,7 @@ fn uninstall_plan(cfg: &Config, sid_arg: Option<String>, keep_data: bool) -> Res
             // 个人文件夹里包括旧位置 Apps 下的程序和所有聊天记录等数据
             steps.push(Step::DeleteProfile(sid.clone()));
         }
+        None if foreign => {}
         None => eprintln!(
             "注意：系统里找不到用户 {user}，也没有给出 --sid，将跳过权限和配置文件清理。\n\
              查找残留 SID 的方法：icacls D:\\ 输出里形如 S-1-5-21-... 的条目。"
@@ -697,9 +723,24 @@ fn uninstall_plan(cfg: &Config, sid_arg: Option<String>, keep_data: bool) -> Res
         && icons.exists() {
             steps.push(Step::DeletePath(icons));
         }
-    steps.push(Step::UnhideFromLogin);
+    // 别人的同名账户可能本来就设成了在登录界面隐藏，不替它改
+    if !foreign {
+        steps.push(Step::UnhideFromLogin);
+    }
     steps.push(Step::DeleteCredential);
     Ok(steps)
+}
+
+/// 权限备份里记下的位置。每次加禁止规则前都会备份，所以这是 IsoBox 动过的所有位置
+fn backup_targets() -> Vec<PathBuf> {
+    let Ok(root) = backup_root() else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(root) else { return Vec::new() };
+    entries
+        .flatten()
+        .filter_map(|e| std::fs::read_to_string(e.path().join("target.txt")).ok())
+        .map(|s| PathBuf::from(s.trim()))
+        .filter(|p| p.exists())
+        .collect()
 }
 
 fn describe(s: &Step, user: &str) -> String {
@@ -1067,6 +1108,10 @@ fn exec(prog: &str, args: &[&str]) -> Result<()> {
 /// 隔离账户的密码存在“运行本程序的账户”的凭据管理器里，快捷方式和交换文件夹也放在这个账户下。
 /// 标准用户在 UAC 窗口里输入另一个管理员的密码时，本程序以那个管理员的身份运行，装好后桌面上的账户用不了
 fn check_same_user() -> Result<()> {
+    // 部署工具常以 SYSTEM 身份静默安装，那样密码和快捷方式都会落到 SYSTEM 名下，桌面上的人用不了
+    if is_local_system() {
+        bail!("不能以 SYSTEM 身份安装隔离账户。请在桌面上登录的管理员账户里运行安装程序，或加 /NOINIT 只装程序文件");
+    }
     let me = std::env::var("USERNAME").unwrap_or_default();
     let Some(desktop) = session_user() else { return Ok(()) };
     if !me.is_empty() && !desktop.is_empty() && !desktop.eq_ignore_ascii_case(&me) {
@@ -1077,6 +1122,27 @@ fn check_same_user() -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// 本进程是不是以 SYSTEM（S-1-5-18）身份运行
+fn is_local_system() -> bool {
+    use windows::Win32::Security::{TOKEN_USER, TokenUser};
+    unsafe {
+        let mut token = HANDLE::default();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+            return false;
+        }
+        // 用 u64 数组保证 TOKEN_USER 的对齐
+        let mut buf = [0u64; 64];
+        let mut len = 0u32;
+        let ok = GetTokenInformation(token, TokenUser, Some(buf.as_mut_ptr().cast()), size_of_val(&buf) as u32, &mut len).is_ok();
+        let _ = CloseHandle(token);
+        if !ok {
+            return false;
+        }
+        let tu = &*(buf.as_ptr() as *const TOKEN_USER);
+        isobox::account::sid_to_string(tu.User.Sid).is_ok_and(|s| s == "S-1-5-18")
+    }
 }
 
 /// 当前会话（桌面）上登录的用户名。服务等没有桌面的会话返回 None
@@ -1097,35 +1163,53 @@ fn session_user() -> Option<String> {
 
 /// 交换文件夹是隔离账户可以读写的地方，选错了会把保护打开一个大口子
 fn check_exchange_dir(p: &Path) -> Result<()> {
-    if !p.is_absolute() || paths::drive_letter(p).is_none() {
+    // 先整理写法：D:\a\..\.. 这样的路径其实是整个盘
+    let p = paths::normalize(p);
+    if !p.is_absolute() || paths::drive_letter(&p).is_none() {
         bail!("交换文件夹要写本地的完整路径，例如 D:\\Downloads\\IsoBox");
     }
-    let lp = p.to_string_lossy().trim_end_matches('\\').to_lowercase();
+    let key = |q: &Path| paths::normalize(q).to_string_lossy().trim_end_matches('\\').to_lowercase();
+    let lp = key(&p);
     if lp.len() <= 2 {
         bail!("交换文件夹不能是整个盘，请在盘里建一个专用的文件夹");
     }
+    let is_inside = |dir: &str| lp.starts_with(&format!("{dir}\\"));
     let env_dir = |k: &str| std::env::var(k).ok().map(PathBuf::from);
-    let mut sensitive: Vec<PathBuf> = [
-        env_dir("SystemRoot"),
-        env_dir("ProgramW6432"),
-        env_dir("ProgramFiles(x86)"),
-        env_dir("ProgramData"),
-        env_dir("USERPROFILE"),
-        Some(PathBuf::from(format!("{}:\\Users", drives::system_drive()))),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    sensitive.push(paths::expected_install_dir());
-    for s in sensitive {
-        let ls = s.to_string_lossy().trim_end_matches('\\').to_lowercase();
-        // 不能是这些目录本身或它们的上级；用户目录下的子文件夹（例如下载\IsoBox）可以
+    let profile = env_dir("USERPROFILE");
+    let users = PathBuf::from(format!("{}:\\Users", drives::system_drive()));
+    // 系统和程序目录、IsoBox 自己、AppData：本身、上级、里面都不行
+    let mut closed: Vec<PathBuf> =
+        [env_dir("SystemRoot"), env_dir("ProgramW6432"), env_dir("ProgramFiles(x86)"), env_dir("ProgramData")]
+            .into_iter()
+            .flatten()
+            .collect();
+    closed.push(paths::expected_install_dir());
+    if let Some(h) = &profile {
+        closed.push(h.join("AppData"));
+    }
+    // 你的个人文件夹：本身和上级不行；在里面建一个专用的子文件夹可以，默认就是 下载\IsoBox
+    let mut personal = paths::personal_folders();
+    personal.extend(profile.clone());
+    personal.push(users.clone());
+    for s in closed.iter().chain(&personal) {
+        let ls = key(s);
         if ls == lp || ls.starts_with(&format!("{lp}\\")) {
             bail!("{} 不能做交换文件夹：隔离软件会因此能读写 {}", p.display(), s.display());
         }
     }
-    if lp.starts_with(&format!("{}\\", paths::expected_install_dir().to_string_lossy().to_lowercase())) {
-        bail!("交换文件夹不能放在 IsoBox 的安装目录里");
+    for s in &closed {
+        if is_inside(&key(s)) {
+            bail!("交换文件夹不能放在 {} 里面", s.display());
+        }
+    }
+    // 别的账户的个人文件夹
+    let lu = key(&users);
+    if is_inside(&lu) {
+        let public = format!("{lu}\\public");
+        let mine = profile.as_deref().map(key).is_some_and(|m| is_inside(&m));
+        if !mine && lp != public && !is_inside(&public) {
+            bail!("交换文件夹不能放在其他账户的个人文件夹里");
+        }
     }
     Ok(())
 }
@@ -1149,6 +1233,11 @@ fn save_data(profile: &Path, dest: &Path) -> Result<()> {
             if e.file_name().eq_ignore_ascii_case("desktop.ini") {
                 continue;
             }
+            // 链接也不是数据：每个新账户的文档里都有 My Music 等隐藏的联接点，指向个人文件夹里的
+            // 音乐等文件夹，带着“禁止列目录”的规则，跨盘复制时 robocopy 会失败
+            if is_link(&e.path()) {
+                continue;
+            }
             let dir = dest.join(to);
             std::fs::create_dir_all(&dir).with_context(|| format!("创建 {} 失败", dir.display()))?;
             move_entry(&e.path(), &unique_path(&dir.join(e.file_name())))?;
@@ -1156,7 +1245,12 @@ fn save_data(profile: &Path, dest: &Path) -> Result<()> {
         }
     }
     if moved == 0 {
-        println!("  这些文件夹都是空的，没有要保留的文件");
+        println!("  没有新的文件要移动");
+    } else {
+        println!("  已移动 {moved} 项到 {}", dest.display());
+    }
+    // 上次移动到一半失败时，这次虽然没有新文件，已经移过去的也要整理权限
+    if !dest.exists() {
         return Ok(());
     }
     // 同盘移动保留了原来的权限（只有隔离账户和管理员能访问）。改为继承交换文件夹的权限，你的账户才能打开
@@ -1165,8 +1259,14 @@ fn save_data(profile: &Path, dest: &Path) -> Result<()> {
     if let Ok(me) = std::env::var("USERNAME") {
         let _ = acl::icacls(&[&dest.display().to_string(), "/setowner", &me, "/t", "/c", "/q"]);
     }
-    println!("  已移动 {moved} 项到 {}", dest.display());
     Ok(())
+}
+
+/// 符号链接或联接点（不跟随链接本身去看）
+fn is_link(p: &Path) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    std::fs::symlink_metadata(p).is_ok_and(|m| m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
 }
 
 /// 移动文件或文件夹。同盘直接改名；跨盘复制后删除，不复制权限，新文件继承目标位置的权限
@@ -1218,7 +1318,8 @@ fn unique_path(p: &Path) -> PathBuf {
 }
 
 /// 安装程序在显示页面前调用，每行一项，安装程序按前缀解析：
-///   account=ready|missing|foreign|nocred   隔离账户：可用、不存在、同名但不是 IsoBox 建的、密码不在当前账户里
+///   account=ready|partial|missing|foreign|nocred
+///           可用、建了一半（install 没做完）、不存在、同名但不是 IsoBox 建的、密码不在当前账户里
 ///   user=<隔离账户名>
 ///   exchange=<交换文件夹>
 ///   drive=<盘符>|<能否保护 1/0>|<默认是否选中 1/0>|<显示的文字>
@@ -1228,6 +1329,7 @@ fn installer_info(cfg: &Config) {
         Err(_) => "missing",
         Ok(_) if user_comment(user).ok().as_deref() != Some(MARKER) => "foreign",
         Ok(_) if cred::load(user).is_err() => "nocred",
+        Ok(sid) if isobox::status::install_gap(cfg, &sid).is_some() => "partial",
         Ok(_) => "ready",
     };
     println!("account={account}");
@@ -1368,16 +1470,30 @@ mod tests {
 
     #[test]
     fn exchange_dir_must_not_open_up_protected_places() {
-        assert!(check_exchange_dir(Path::new(r"D:\")).is_err());
-        assert!(check_exchange_dir(Path::new(r"relative\dir")).is_err());
-        assert!(check_exchange_dir(Path::new(r"C:\Users")).is_err());
-        assert!(check_exchange_dir(Path::new(r"C:\Windows")).is_err());
+        let bad = |p: &str| assert!(check_exchange_dir(Path::new(p)).is_err(), "{p} 应该被拒绝");
+        let good = |p: &Path| assert!(check_exchange_dir(p).is_ok(), "{} 应该可以", p.display());
+        bad(r"D:\");
+        bad(r"D:\a\..\..");
+        bad(r"relative\dir");
+        bad(r"C:\Users");
+        bad(r"C:\Users\SomeoneElse\Downloads\x");
+        bad(r"C:\Windows");
+        bad(r"C:\Windows\Temp\x");
+        bad(r"C:\ProgramData\x");
         assert!(check_exchange_dir(&paths::expected_install_dir()).is_err());
         assert!(check_exchange_dir(&paths::expected_install_dir().join("x")).is_err());
-        if let Ok(home) = std::env::var("USERPROFILE") {
-            assert!(check_exchange_dir(Path::new(&home)).is_err());
-            assert!(check_exchange_dir(&Path::new(&home).join(r"Downloads\IsoBox")).is_ok());
+        for f in paths::personal_folders() {
+            assert!(check_exchange_dir(&f).is_err(), "{} 应该被拒绝", f.display());
+            good(&f.join("IsoBox"));
         }
-        assert!(check_exchange_dir(Path::new(r"D:\Exchange")).is_ok());
+        if let Ok(home) = std::env::var("USERPROFILE") {
+            bad(&home);
+            bad(&format!(r"{home}\AppData\Local\x"));
+            bad(&format!(r"{home}\Downloads\IsoBox\..\.."));
+            good(&Path::new(&home).join(r"Downloads\IsoBox"));
+        }
+        good(Path::new(r"D:\Exchange"));
+        good(Path::new(r"D:\Swap\\"));
+        good(Path::new(r"C:\Users\Public\IsoBox"));
     }
 }
