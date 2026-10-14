@@ -125,6 +125,9 @@ fn app_info() -> serde_json::Value {
         "config": cfg_path().display().to_string(),
         "install_dir": paths::expected_install_dir().display().to_string(),
         "uninstaller": elevate::uninstaller().is_some(),
+        "license": Some(paths::expected_install_dir().join(r"licenses\LICENSE.txt"))
+            .filter(|p| p.exists())
+            .map(|p| p.display().to_string()),
         "notices": Some(paths::expected_install_dir().join(r"licenses\THIRD-PARTY-NOTICES.txt"))
             .filter(|p| p.exists())
             .map(|p| p.display().to_string()),

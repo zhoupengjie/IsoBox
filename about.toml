@@ -18,3 +18,5 @@ accepted = [
 # 只列进入程序的库：开发和编译时用的工具不随程序分发
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
+# 不列 IsoBox 自己（publish = false 的 isobox、isobox-gui）：它的 GPL-3.0 单独放在 licenses\LICENSE.txt
+private = { ignore = true }

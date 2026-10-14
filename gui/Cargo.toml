@@ -3,6 +3,9 @@ name = "isobox-gui"
 version = "0.1.0"
 edition = "2024"
 description = "IsoBox 图形界面和托盘"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/zhoupengjie/IsoBox"
+publish = false
 
 [[bin]]
 name = "isobox-gui"

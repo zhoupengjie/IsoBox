@@ -6,7 +6,7 @@
 
 ## 状态
 
-开发中，还没有正式发布。核心、图形界面和安装程序已完成，正在准备发布：CI、许可证、代码签名、试用。详见 [ROADMAP.md](ROADMAP.md)，接手开发请先读 [HANDOFF.md](HANDOFF.md)。
+开发中，还没有正式发布。核心、图形界面和安装程序已完成，正在准备发布：CI、代码签名、试用。详见 [ROADMAP.md](ROADMAP.md)，接手开发请先读 [HANDOFF.md](HANDOFF.md)。
 
 ## 安装和使用
 
@@ -42,4 +42,8 @@ powershell -ExecutionPolicy Bypass -File installer\build.ps1   # 生成 target\i
 
 ## 许可证
 
-IsoBox 自己的许可证尚未确定。安装包捆绑的 7-Zip 使用 GNU LGPL，编译进程序的 Rust 库的许可证见安装目录里的 `licenses\THIRD-PARTY-NOTICES.txt`。
+IsoBox 是自由软件，以 [GNU 通用公共许可证第 3 版](LICENSE)或（由你选择）任何更新的版本发布：可以自由使用、修改和再分发，但分发时（包括修改后的版本）必须同样以 GPL 提供源代码。IsoBox 不提供任何担保。
+
+Copyright (C) 2026 Pengjie Zhou
+
+安装包捆绑的 7-Zip 使用 GNU LGPL，编译进程序的 Rust 库的许可证见安装目录里的 `licenses\THIRD-PARTY-NOTICES.txt`。

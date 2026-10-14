@@ -7,6 +7,9 @@ name = "isobox"
 version = "0.1.0"
 edition = "2024"
 description = "以独立 Windows 账户运行不信任的桌面软件，让它读不到你的文件"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/zhoupengjie/IsoBox"
+publish = false
 
 [[bin]]
 name = "isobox-setup"

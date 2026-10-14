@@ -100,11 +100,15 @@ if (-not (Get-Command cargo-about -ErrorAction SilentlyContinue)) {
     if (Get-Command cargo-binstall -ErrorAction SilentlyContinue) {
         cargo binstall --no-confirm --locked 'cargo-about@0.9'
     } else {
-        cargo install --locked cargo-about --version '^0.9'
+        # 不加 cli 功能只编译库：cargo install 照样报告成功，但不会装上 cargo-about.exe
+        cargo install --locked cargo-about --version '^0.9' --features cli
     }
-    if ($LASTEXITCODE -ne 0) { throw '安装 cargo-about 失败' }
+    if ($LASTEXITCODE -ne 0 -or -not (Get-Command cargo-about -ErrorAction SilentlyContinue)) { throw '安装 cargo-about 失败' }
 }
 New-Item -ItemType Directory -Force "$stage\licenses" | Out-Null
+# IsoBox 自己的许可证（GPL-3.0），换成 Windows 换行，记事本里也能正常显示
+$license = [IO.File]::ReadAllText("$root\LICENSE") -replace "`r?`n", "`r`n"
+[IO.File]::WriteAllText("$stage\licenses\LICENSE.txt", $license, (New-Object Text.UTF8Encoding $false))
 cargo about generate --workspace --manifest-path "$root\Cargo.toml" -c "$root\about.toml" "$PSScriptRoot\notices.hbs" -o "$stage\licenses\THIRD-PARTY-NOTICES.txt"
 if ($LASTEXITCODE -ne 0) { throw 'cargo about 失败：可能有依赖用了 about.toml 里没有列出的许可证' }
 

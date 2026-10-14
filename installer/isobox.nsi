@@ -4,7 +4,7 @@
 ; 需要的定义（build.ps1 会传入）：
 ;   VERSION  版本号，例如 0.1.0
 ;   STAGE    准备好的文件：四个 exe、isobox.toml、notice.txt、sidebar.bmp、7-Zip\7z.exe、7z.dll、License.txt、
-;            licenses\THIRD-PARTY-NOTICES.txt
+;            licenses\LICENSE.txt、licenses\THIRD-PARTY-NOTICES.txt
 ;   OUTFILE  生成的安装程序
 ;   ICON     安装程序图标
 ;   PREVIEW  可选。只用来看界面：普通权限运行，不修改系统
@@ -611,6 +611,7 @@ Section "IsoBox" SecMain
   File "${STAGE}\7-Zip\7z.dll"
   File "${STAGE}\7-Zip\License.txt"
   SetOutPath "$INSTDIR\licenses"
+  File "${STAGE}\licenses\LICENSE.txt"
   File "${STAGE}\licenses\THIRD-PARTY-NOTICES.txt"
   SetOutPath "$INSTDIR"
   ; 安装目录里的配置才是实际生效的，更新时绝不覆盖

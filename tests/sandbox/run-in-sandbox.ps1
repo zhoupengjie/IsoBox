@@ -79,6 +79,7 @@ try {
     Check 'installer: bundled 7-Zip' ((Test-Path "$IB\7-Zip\7z.exe") -and (Test-Path "$IB\7-Zip\7z.dll") -and (Test-Path "$IB\7-Zip\License.txt"))
     Check 'installer: config and uninstaller' ((Test-Path "$IB\isobox.toml") -and (Test-Path "$IB\uninstall.exe"))
     Check 'installer: third-party license notices' ((Get-Item "$IB\licenses\THIRD-PARTY-NOTICES.txt" -ErrorAction SilentlyContinue).Length -gt 10000)
+    Check 'installer: IsoBox license (GPL-3.0)' ((Get-Content "$IB\licenses\LICENSE.txt" -TotalCount 2 -ErrorAction SilentlyContinue) -join ' ' -match 'GNU GENERAL PUBLIC LICENSE\s+Version 3')
     Check 'installer: install dir read-only for Users' ((Acl $IB) -match 'BUILTIN\\Users:\(OI\)\(CI\)\(RX\)')
     Check 'installer: install dir does not inherit' (-not ((Acl $IB) -match '\(I\)')) (Acl $IB)
     $un = Get-ItemProperty $uninstKey -ErrorAction SilentlyContinue
